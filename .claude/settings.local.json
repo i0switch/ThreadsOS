@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(delegate-check)",
+      "Bash(powershell -ExecutionPolicy Bypass -File *codex-delegate.ps1*)",
+      "Bash(powershell -ExecutionPolicy Bypass -File *gemini-delegate.ps1*)",
+      "Bash(pnpm test:*)"
+    ]
+  }
+}

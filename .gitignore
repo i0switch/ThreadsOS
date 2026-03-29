@@ -1,0 +1,14 @@
+node_modules/
+dist/
+data/
+.env
+.env.*
+secrets/
+*.db
+*.sqlite
+.pnpm-home/
+node_modules_oldbroken/
+.corepack/
+.test-output/
+review-pipeline-output.txt
+review-pipeline-error.txt
