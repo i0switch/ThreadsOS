@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { ClaudeLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
 import {
   DryRunNoteApiClient,
@@ -71,9 +71,28 @@ function createNoteApiClient() {
 async function runTrackedSubJob(
   jobName: string,
   task: () => Promise<string>,
+  stuckThresholdMinutes = 60,
 ): Promise<string> {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
+
+  const stuckThreshold = new Date(
+    Date.now() - stuckThresholdMinutes * 60 * 1000,
+  ).toISOString();
+  db.update(scheduledJobRuns)
+    .set({
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      resultSummary: `Stuck running for over ${stuckThresholdMinutes} minutes`,
+    })
+    .where(
+      and(
+        eq(scheduledJobRuns.jobName, jobName),
+        eq(scheduledJobRuns.status, "running"),
+        lt(scheduledJobRuns.startedAt, stuckThreshold),
+      ),
+    )
+    .run();
 
   db.insert(scheduledJobRuns)
     .values({
@@ -164,6 +183,7 @@ await runJob(
       .where(eq(heartbeatStates.jobName, "hourly-heartbeat"))
       .run();
 
+    let isFailed = false;
     try {
       if (!dryRun) {
         const seededThreads =
@@ -300,6 +320,14 @@ await runJob(
               break;
             }
 
+            case "weekly_retro":
+              results.push(
+                await runTrackedSubJob("weekly-retro", () =>
+                  orchestration.runWeeklyRetro(llm, storage, dryRun),
+                ),
+              );
+              break;
+
             case "optimize_schedule":
               await optimizer.analyzeAndUpdate(llm);
               results.push("Schedule optimized");
@@ -325,13 +353,53 @@ await runJob(
         }
       }
 
+      isFailed = results.some((r) => r.startsWith("FAILED:"));
       return results.join("\n");
+    } catch (err) {
+      isFailed = true;
+      throw err;
     } finally {
+      const prevFailures = current?.consecutiveFailures ?? 0;
+      const newFailures = isFailed ? prevFailures + 1 : 0;
+
+      if (isFailed && newFailures >= 5 && (newFailures === 5 || newFailures % 5 === 0)) {
+        await notification
+          .sendNotification({
+            type: "critical",
+            message: `🚨 緊急: ${newFailures}回連続失敗`,
+          })
+          .catch((e) =>
+            logger.error({ error: String(e) }, "Failed to send critical alert"),
+          );
+      } else if (isFailed && newFailures >= 3 && (newFailures === 3 || newFailures % 3 === 0)) {
+        await notification
+          .sendNotification({
+            type: "alert",
+            message: `⚠️ ${newFailures}回連続失敗中`,
+          })
+          .catch((e) =>
+            logger.error({ error: String(e) }, "Failed to send alert"),
+          );
+      } else if (!isFailed && prevFailures > 0) {
+        await notification
+          .sendNotification({
+            type: "recovery",
+            message: "recovery通知",
+          })
+          .catch((e) =>
+            logger.error(
+              { error: String(e) },
+              "Failed to send recovery notice",
+            ),
+          );
+      }
+
       db.update(heartbeatStates)
         .set({
           lockedBy: null,
           lockedAt: null,
           lastRunAt: new Date().toISOString(),
+          consecutiveFailures: newFailures,
         })
         .where(eq(heartbeatStates.jobName, "hourly-heartbeat"))
         .run();

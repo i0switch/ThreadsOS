@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { logger } from "../app/logger.js";
 import { db } from "../db/index.js";
 import { scheduledJobRuns } from "../db/schema.js";
@@ -7,15 +7,43 @@ import { scheduledJobRuns } from "../db/schema.js";
 export interface JobOptions {
   name: string;
   dryRun?: boolean;
+  stuckThresholdMinutes?: number;
 }
 
 export async function runJob(
   options: JobOptions,
   execute: (ctx: { dryRun: boolean; logger: typeof logger }) => Promise<string>,
 ): Promise<void> {
-  const { name, dryRun = false } = options;
+  const { name, dryRun = false, stuckThresholdMinutes = 60 } = options;
   const runId = randomUUID();
   const jobLogger = logger.child({ job: name, runId, dryRun });
+
+  // Stuck running cleanup
+  const stuckThreshold = new Date(
+    Date.now() - stuckThresholdMinutes * 60 * 1000,
+  ).toISOString();
+  const cleanedUp = db
+    .update(scheduledJobRuns)
+    .set({
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      resultSummary: `Stuck running for over ${stuckThresholdMinutes} minutes`,
+    })
+    .where(
+      and(
+        eq(scheduledJobRuns.jobName, name),
+        eq(scheduledJobRuns.status, "running"),
+        lt(scheduledJobRuns.startedAt, stuckThreshold),
+      ),
+    )
+    .run();
+
+  if (cleanedUp.changes > 0) {
+    jobLogger.warn(
+      { cleanedUpCount: cleanedUp.changes },
+      "Cleaned up stuck running jobs",
+    );
+  }
 
   // 二重起動防止
   const running = db

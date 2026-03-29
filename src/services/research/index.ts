@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
+import { JinaSearchClient, type WebSearchClient } from "../../adapters/web-search/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import { competitorSnapshots, researchItems } from "../../db/schema.js";
 import type { ResearchItem } from "../../domain/threads/index.js";
+import { ProfileContextServiceImpl } from "../profile-context/index.js";
 
 export interface ResearchService {
   researchTopic(
@@ -23,19 +25,47 @@ export interface ResearchService {
 }
 
 export class ResearchServiceImpl implements ResearchService {
+  private profileService = new ProfileContextServiceImpl();
+  private webSearchClient: WebSearchClient;
+
+  constructor(webSearchClient?: WebSearchClient) {
+    this.webSearchClient = webSearchClient ?? new JinaSearchClient();
+  }
+
   async researchTopic(
     topicId: string,
     topicName: string,
     llm: LlmClient,
   ): Promise<ResearchItem[]> {
-    const prompt = `以下のトピックについて、Threads投稿とnote記事に使えるリサーチを行ってください。
+    const profileText = this.profileService.formatForPrompt();
+    const profileSection = profileText ? `\n## 運用者プロフィール\n${profileText}\n(このジャンル・トーンに特化したリサーチを行ってください。)` : "";
 
-トピック: ${topicName}
+    const query = `${topicName} Threads 投稿 コツ`;
+    let webResultsStr = "";
+    const sourceUrls: string[] = [];
+
+    try {
+      const searchResults = await this.webSearchClient.search(query, { count: 3 });
+      if (searchResults.length > 0) {
+        webResultsStr = `\n## Web検索結果\n${searchResults.map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n内容: ${r.snippet}`).join("\n\n")}\n`;
+        sourceUrls.push(...searchResults.map(r => r.url));
+      }
+    } catch (e) {
+      logger.warn({ error: e }, "Web search failed in researchTopic, falling back to LLM only");
+    }
+
+    const searchInstruction = webResultsStr ? "以下のWeb検索結果と既存知識を組み合わせてリサーチを行ってください。" : "既存知識を活用してリサーチを行ってください。";
+
+    const prompt = `以下のトピックについて、Threads投稿とnote記事に使えるリサーチを行ってください。
+${searchInstruction}
+${profileSection}${webResultsStr}
+## トピック
+${topicName}
 
 以下の形式でJSON配列を返してください:
 [
   {
-    "source": "情報源の種類",
+    "source": "情報源の種類 (URLがわかる場合はURLを記載)",
     "content": "発見した情報・インサイト",
     "evidenceType": "data" | "anecdote" | "expert" | "trend",
     "confidence": "high" | "medium" | "low"
@@ -64,12 +94,17 @@ export class ResearchServiceImpl implements ResearchService {
     const now = new Date().toISOString();
 
     for (const p of parsed) {
+      let finalSource = p.source;
+      if (sourceUrls.length > 0 && p.source.includes("Web") && !p.source.includes("http")) {
+        finalSource = `Web検索 (${sourceUrls[0]})`;
+      }
+      
       const id = randomUUID();
       db.insert(researchItems)
         .values({
           id,
           topicId,
-          source: p.source,
+          source: finalSource,
           content: p.content,
           evidenceType: p.evidenceType,
           confidence: p.confidence,
@@ -80,7 +115,7 @@ export class ResearchServiceImpl implements ResearchService {
       items.push({
         id,
         topicId,
-        source: p.source,
+        source: finalSource,
         content: p.content,
         evidenceType: p.evidenceType as ResearchItem["evidenceType"],
         confidence: p.confidence as ResearchItem["confidence"],

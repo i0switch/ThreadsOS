@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, gte } from "drizzle-orm";
+import { eq, gte, desc } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import {
   DryRunNoteResearchClient,
@@ -11,6 +11,7 @@ import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import {
   humanInputs,
+  improvementInsights,
   researchItems,
   threadPostResults,
   topics,
@@ -220,6 +221,37 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     return `Researched ${topics.length} topics. ${dryRun ? "(dry-run)" : ""}`;
   }
 
+  private getImprovementInsightsSummary(): string {
+    const priorityOrder: Record<string, number> = { high: 3, medium: 2, low: 1 };
+
+    const retroInsights = db
+      .select()
+      .from(improvementInsights)
+      .where(eq(improvementInsights.sourceType, "retro"))
+      .orderBy(desc(improvementInsights.createdAt))
+      .limit(10)
+      .all()
+      .sort((a, b) => (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0))
+      .slice(0, 3);
+
+    const postInsights = db
+      .select()
+      .from(improvementInsights)
+      .where(eq(improvementInsights.sourceType, "thread_post"))
+      .orderBy(desc(improvementInsights.createdAt))
+      .limit(10)
+      .all()
+      .sort((a, b) => (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0))
+      .slice(0, 3);
+
+    const allInsights = [...retroInsights, ...postInsights];
+    if (allInsights.length === 0) return "";
+
+    return allInsights
+      .map((i) => `- [${i.priority}] ${i.insight} -> ${i.action}`)
+      .join("\n");
+  }
+
   async runDailyThreadsPlan(
     llm: LlmClient,
     storage: StorageClient,
@@ -233,6 +265,8 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     let totalDrafts = 0;
     let passedDrafts = 0;
     const date = new Date().toISOString().split("T")[0];
+
+    const insightsSummary = this.getImprovementInsightsSummary();
 
     for (const topic of topics) {
       if (dryRun) {
@@ -252,6 +286,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
         summary,
         5,
         llm,
+        insightsSummary,
       );
       totalDrafts += drafts.length;
 

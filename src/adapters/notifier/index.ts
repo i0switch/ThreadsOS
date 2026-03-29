@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { AppError, ExternalApiError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 
-export type NotificationChannel = "progress" | "action_needed" | "alert";
+export type NotificationChannel = "progress" | "action_needed" | "alert" | "critical" | "recovery";
 
 export interface NotifierClient {
   send(
@@ -24,6 +24,8 @@ function wrapDiscordMessage(
     progress: "[progress]",
     action_needed: "[action-needed]",
     alert: "[alert]",
+    critical: "[CRITICAL]",
+    recovery: "[recovery]",
   }[channel];
 
   return `${prefix}\n${content}`.slice(0, 1900);

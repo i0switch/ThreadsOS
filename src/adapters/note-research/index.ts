@@ -1,6 +1,7 @@
 import { AppError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 import { loadEnv } from "../../config/env.js";
+import { JinaSearchClient, type WebSearchClient } from "../web-search/index.js";
 
 export type NoteMode = "research_only" | "draft_assist" | "browser_assisted";
 
@@ -30,19 +31,77 @@ export interface NoteResearchClient {
   ): Promise<Array<{ title: string; url: string; snippet: string }>>;
 }
 
+export class JinaReaderClient {
+  private apiKey: string | undefined;
+  private initialized = false;
+
+  private ensureInit(): void {
+    if (!this.initialized) {
+      this.apiKey = loadEnv().JINA_API_KEY;
+      this.initialized = true;
+    }
+  }
+
+  async read(url: string): Promise<{ title: string; content: string; author: string } | null> {
+    this.ensureInit();
+    const endpoint = `https://r.jina.ai/${url}`;
+
+    try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+      };
+      if (this.apiKey) {
+        headers["Authorization"] = `Bearer ${this.apiKey}`;
+      }
+
+      const response = await fetch(endpoint, { headers });
+
+      if (!response.ok) {
+        logger.error({ status: response.status, statusText: response.statusText }, "Jina Reader API failed");
+        return null;
+      }
+
+      const data = await response.json();
+      const jinaData = data.data ?? data;
+
+      return {
+        title: jinaData.title ?? "Unknown",
+        content: jinaData.content ?? "",
+        author: jinaData.author ?? "Unknown",
+      };
+    } catch (error) {
+      logger.error({ error, url }, "Error executing Jina Reader");
+      return null;
+    }
+  }
+}
+
 export class NoteResearchClientImpl implements NoteResearchClient {
-  constructor() {
-    // research_only または draft_assist でないと初期化自体を拒否
-    assertNoteMode(["research_only", "draft_assist"]);
+  private webSearchClient: WebSearchClient;
+  private jinaReaderClient = new JinaReaderClient();
+
+  constructor(webSearchClient?: WebSearchClient) {
+    // リサーチは全モードで許可（書き込みガードは各write操作で行う）
+    assertNoteMode(["research_only", "draft_assist", "browser_assisted"]);      
+    this.webSearchClient = webSearchClient ?? new JinaSearchClient();
   }
 
   async fetchPublicPage(
     url: string,
   ): Promise<{ title: string; content: string; author: string }> {
-    // research_only: 公開ページのHTMLを取得してパース
-    // 実運用ではfetchでHTMLを取得し、パースする
-    logger.info({ url }, "Fetching note public page");
+    logger.info({ url }, "Fetching note public page via Jina Reader");
 
+    try {
+      const jinaResult = await this.jinaReaderClient.read(url);
+      if (jinaResult && jinaResult.content) {
+        return jinaResult;
+      }
+    } catch (e) {
+      logger.warn({ url, error: e }, "Jina Reader failed, falling back to basic fetch");
+    }
+
+    // fallback
+    logger.info({ url }, "Fetching note public page via basic fetch");
     try {
       const response = await fetch(url);
       if (!response.ok) {
@@ -53,7 +112,7 @@ export class NoteResearchClientImpl implements NoteResearchClient {
       // Simple HTML parsing (production should use a proper parser)
       const titleMatch = html.match(/<title[^>]*>(.*?)<\/title>/i);
       const title =
-        titleMatch?.[1]?.replace(/ \| note.*$/, "").trim() ?? "Unknown";
+        titleMatch?.[1]?.replace(/ \| note.*$/, "").trim() ?? "Unknown";        
 
       // Extract og:description or meta description as snippet
       const descMatch = html.match(
@@ -77,11 +136,22 @@ export class NoteResearchClientImpl implements NoteResearchClient {
   async searchNotes(
     query: string,
   ): Promise<Array<{ title: string; url: string; snippet: string }>> {
-    // note doesn't have a public search API
-    // This is a placeholder for research_only mode
-    // In production, could use web search API to find note articles
-    logger.info({ query }, "Note search (placeholder - no public API)");
-    return [];
+    logger.info({ query }, "Note search using Web Search");
+    const searchQuery = `site:note.com ${query}`;
+    try {
+      const results = await this.webSearchClient.search(searchQuery, { count: 10 });
+      return results.filter((r) => {
+        try {
+          const url = new URL(r.url);
+          return url.hostname.endsWith("note.com");
+        } catch {
+          return false;
+        }
+      });
+    } catch (error) {
+      logger.error({ error, query }, "Failed to search notes via Web Search");  
+      return [];
+    }
   }
 }
 

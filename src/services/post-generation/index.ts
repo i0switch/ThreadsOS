@@ -5,6 +5,7 @@ import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import { threadPostDrafts } from "../../db/schema.js";
 import type { ThreadPostDraft } from "../../domain/threads/index.js";
+import { ProfileContextServiceImpl } from "../profile-context/index.js";
 
 export interface PostGenerationService {
   generateDrafts(
@@ -13,6 +14,7 @@ export interface PostGenerationService {
     researchSummary: string,
     count: number,
     llm: LlmClient,
+    improvementInsights?: string,
   ): Promise<ThreadPostDraft[]>;
   getDraft(draftId: string): Promise<ThreadPostDraft | null>;
   regenerateDraft(
@@ -23,21 +25,28 @@ export interface PostGenerationService {
 }
 
 export class PostGenerationServiceImpl implements PostGenerationService {
+  private profileService = new ProfileContextServiceImpl();
+
   async generateDrafts(
     topicId: string,
     topicName: string,
     researchSummary: string,
     count: number,
     llm: LlmClient,
+    improvementInsights?: string,
   ): Promise<ThreadPostDraft[]> {
-    const prompt = `あなたはThreads投稿のドラフトを作成するコピーライターです。
+    const profileText = this.profileService.formatForPrompt();
+    const profileSection = profileText ? `\n## 運用者プロフィール\n${profileText}\n` : "";
+    const insightsSection = improvementInsights ? `\n## 過去の分析から得た改善指示\n${improvementInsights}\n` : "";
 
+    const prompt = `あなたはThreads投稿のドラフトを作成するコピーライターです。
+${profileSection}
 ## トピック
 ${topicName}
 
 ## リサーチ
 ${researchSummary}
-
+${insightsSection}
 ## 要件
 - ${count}本の投稿候補を作成
 - 1投稿1メッセージ原則
@@ -134,8 +143,11 @@ ${researchSummary}
     const existing = await this.getDraft(draftId);
     if (!existing) throw new Error(`Draft not found: ${draftId}`);
 
-    const prompt = `以下の投稿を改善してください。
+    const profileText = this.profileService.formatForPrompt();
+    const profileSection = profileText ? `\n## 運用者プロフィール\n${profileText}\n` : "";
 
+    const prompt = `以下の投稿を改善してください。
+${profileSection}
 ## 元の投稿
 ${existing.body}
 

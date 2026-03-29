@@ -15,6 +15,7 @@ const envSchema = z.object({
   THREADS_ACCESS_TOKEN: z.string().optional(),
   THREADS_USER_ID: z.string().optional(),
   LLM_API_KEY: z.string().optional(),
+  JINA_API_KEY: z.string().optional(),
   NOTE_SESSION_COOKIE: z.string().optional(),
   NOTIFICATION_DISCORD_WEBHOOK: z.string().url().optional(),
   NOTIFICATION_LINE_TOKEN: z.string().optional(),

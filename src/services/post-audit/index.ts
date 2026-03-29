@@ -9,8 +9,9 @@ import {
   threadPostDrafts,
 } from "../../db/schema.js";
 import type { ThreadPostAudit } from "../../domain/threads/index.js";
+import { ProfileContextServiceImpl } from "../profile-context/index.js";
 
-const AUDIT_CRITERIA = [
+const BASE_AUDIT_CRITERIA = [
   "誇張しすぎ",
   "具体性不足",
   "フック弱い",
@@ -29,6 +30,8 @@ export interface PostAuditService {
 }
 
 export class PostAuditServiceImpl implements PostAuditService {
+  private profileService = new ProfileContextServiceImpl();
+
   async auditDraft(draftId: string, llm: LlmClient): Promise<ThreadPostAudit> {
     const draft = db
       .select()
@@ -38,7 +41,19 @@ export class PostAuditServiceImpl implements PostAuditService {
 
     if (!draft) throw new Error(`Draft not found: ${draftId}`);
 
-    const auditResult = await llm.audit(draft.body, AUDIT_CRITERIA);
+    const profile = this.profileService.getProfileContext();
+    const criteria = [...BASE_AUDIT_CRITERIA];
+
+    if (profile) {
+      if (profile.forbiddenTopics.length > 0) {
+        criteria.push(`禁止トピックを含んでいる (${profile.forbiddenTopics.join(", ")})`);
+      }
+      if (profile.tone) {
+        criteria.push(`指定トーンからズレている (${profile.tone})`);
+      }
+    }
+
+    const auditResult = await llm.audit(draft.body, criteria);
 
     const now = new Date().toISOString();
     const verdict = auditResult.verdict as ThreadPostAudit["verdict"];

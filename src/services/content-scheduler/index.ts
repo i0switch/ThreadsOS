@@ -28,6 +28,7 @@ export type ActionType =
   | "reply_safe"
   | "generate_note"
   | "optimize_schedule"
+  | "weekly_retro"
   | "notify";
 
 export interface ScheduledAction {
@@ -55,6 +56,23 @@ function getJstHour(date = new Date()): number {
       hour12: false,
     }).format(date),
   );
+}
+
+function getJstDayOfWeek(date = new Date()): number {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: JST_TIME_ZONE,
+    weekday: "short",
+  }).format(date);
+  const map: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  return map[weekday] ?? 0;
 }
 
 function hoursBetween(later: Date, earlierIso: string): number {
@@ -290,9 +308,35 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
     if (jstHour === 0 || jstHour === 1) {
       actions.push({
         type: "optimize_schedule",
-        priority: 9,
+        priority: 10,
         reason: "日次スケジュール最適化",
       });
+
+      const dayOfWeek = getJstDayOfWeek(now);
+      if (dayOfWeek === 1) {
+        const lastRetroJob = db
+          .select()
+          .from(scheduledJobRuns)
+          .where(
+            and(
+              eq(scheduledJobRuns.jobName, "weekly-retro"),
+              eq(scheduledJobRuns.status, "completed"),
+            ),
+          )
+          .orderBy(desc(scheduledJobRuns.startedAt))
+          .limit(1)
+          .get();
+        const retroJobAge = lastRetroJob
+          ? hoursBetween(now, lastRetroJob.startedAt)
+          : Number.POSITIVE_INFINITY;
+        if (retroJobAge >= 144) {
+          actions.push({
+            type: "weekly_retro",
+            priority: 9,
+            reason: `前回Weekly Retroから${Math.floor(retroJobAge)}時間経過`,
+          });
+        }
+      }
     }
 
     actions.sort((left, right) => left.priority - right.priority);

@@ -48,7 +48,7 @@ export interface ProgressReport {
 }
 
 export interface NotificationPayload {
-  type: "progress" | "action_needed" | "alert";
+  type: "progress" | "action_needed" | "alert" | "critical" | "recovery";
   message?: string;
   report?: ProgressReport;
 }
