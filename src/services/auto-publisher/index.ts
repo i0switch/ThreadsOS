@@ -15,8 +15,6 @@ import {
   threadReplies,
 } from "../../db/schema.js";
 
-const dryRunMode = process.argv.includes("--dry-run");
-
 function readEnvInt(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -34,6 +32,7 @@ export interface PublishResult {
 export interface AutoPublisherOptions {
   maxPostsPerHour?: number;
   maxRepliesPerHour?: number;
+  dryRun?: boolean;
 }
 
 export interface AutoPublisherService {
@@ -45,12 +44,14 @@ export interface AutoPublisherService {
 export class AutoPublisherServiceImpl implements AutoPublisherService {
   private readonly maxPostsPerHour: number;
   private readonly maxRepliesPerHour: number;
+  private readonly dryRun: boolean;
 
   constructor(options: AutoPublisherOptions = {}) {
     this.maxPostsPerHour =
       options.maxPostsPerHour ?? readEnvInt("MAX_POSTS_PER_HOUR", 3);
     this.maxRepliesPerHour =
       options.maxRepliesPerHour ?? readEnvInt("MAX_REPLIES_PER_HOUR", 10);
+    this.dryRun = options.dryRun ?? false;
   }
 
   async publishApprovedThreadDrafts(
@@ -71,7 +72,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
       .limit(this.maxPostsPerHour)
       .all();
 
-    if (dryRunMode) {
+    if (this.dryRun) {
       return dueSlots.map((slot) => ({
         id: slot.draftId ?? slot.id,
         url: `dry-run://threads/${slot.id}`,
@@ -163,7 +164,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
       .limit(1)
       .all();
 
-    if (dryRunMode) {
+    if (this.dryRun) {
       return dueSlots.map((slot) => ({
         id: slot.draftId ?? slot.id,
         url: `dry-run://note/${slot.id}`,
@@ -289,7 +290,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
 
     let sent = 0;
 
-    if (dryRunMode) {
+    if (this.dryRun) {
       return pending.filter((item) => Boolean(item.autoReplyBody)).length;
     }
 

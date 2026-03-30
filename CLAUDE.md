@@ -1,5 +1,11 @@
 ﻿# ThreadsOS
 
+## 【強制】RTK & 委譲ルール違反ゼロ原則
+- Bashコマンドは `rtk` 必須（フック自動付与。でも意識すること）
+- エラーが返っても自分で修正するな。委譲ルール確認 → Gemini or Codex
+- 「もう1回だけ自分で」= 禁止思考
+- Claude直でOKは「1箇所以内 かつ 原因明確」のみ
+
 ---
 ## Context Rot Prevention & Structured Handoff
 

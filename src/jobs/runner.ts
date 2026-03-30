@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, lt } from "drizzle-orm";
 import { logger } from "../app/logger.js";
+import { ensureAutonomyTables } from "../db/bootstrap.js";
 import { db } from "../db/index.js";
 import { scheduledJobRuns } from "../db/schema.js";
 
@@ -14,6 +15,8 @@ export async function runJob(
   options: JobOptions,
   execute: (ctx: { dryRun: boolean; logger: typeof logger }) => Promise<string>,
 ): Promise<void> {
+  ensureAutonomyTables();
+
   const { name, dryRun = false, stuckThresholdMinutes = 60 } = options;
   const runId = randomUUID();
   const jobLogger = logger.child({ job: name, runId, dryRun });

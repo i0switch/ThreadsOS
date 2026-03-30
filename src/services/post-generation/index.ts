@@ -87,6 +87,28 @@ ${insightsSection}
     const now = new Date().toISOString();
 
     for (const p of parsed) {
+      if (p.body.length > 500) {
+        logger.warn(
+          { bodyLength: p.body.length },
+          "Draft exceeds 500 chars – marking as rejected",
+        );
+        const id = randomUUID();
+        db.insert(threadPostDrafts)
+          .values({
+            id,
+            topicId,
+            body: p.body,
+            hookType: p.hookType,
+            ctaType: p.ctaType,
+            noteTransition: p.noteTransition,
+            status: "rejected",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .run();
+        continue;
+      }
+
       const id = randomUUID();
       db.insert(threadPostDrafts)
         .values({

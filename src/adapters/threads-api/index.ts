@@ -59,23 +59,52 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
       "Threads API request",
     );
 
-    const response = await fetch(fullUrl, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
+    const maxRetries = 3;
+    let lastError: unknown;
 
-    if (!response.ok) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const response = await fetch(fullUrl, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
+      });
+
+      if (response.ok) {
+        return response.json() as Promise<T>;
+      }
+
+      const status = response.status;
       const errorBody = await response.text();
-      throw new ExternalApiError(
-        "Threads API",
-        `${response.status}: ${errorBody}`,
-      );
+
+      if (status === 429) {
+        if (attempt >= 1) {
+          throw new ExternalApiError("Threads API", `429 (rate limit): ${errorBody}`);
+        }
+        const retryAfter = response.headers.get("Retry-After");
+        const waitMs = retryAfter ? Number(retryAfter) * 1000 : 60_000;
+        logger.warn({ status, waitMs, attempt }, "Threads API 429 – retrying after wait");
+        await new Promise((r) => setTimeout(r, waitMs));
+        lastError = new ExternalApiError("Threads API", `${status}: ${errorBody}`);
+        continue;
+      }
+
+      if (status >= 500) {
+        if (attempt >= maxRetries) {
+          throw new ExternalApiError("Threads API", `${status}: ${errorBody}`);
+        }
+        const waitMs = 1000 * 2 ** attempt;
+        logger.warn({ status, waitMs, attempt }, "Threads API 5xx – retrying with backoff");
+        await new Promise((r) => setTimeout(r, waitMs));
+        lastError = new ExternalApiError("Threads API", `${status}: ${errorBody}`);
+        continue;
+      }
+
+      throw new ExternalApiError("Threads API", `${status}: ${errorBody}`);
     }
 
-    return response.json() as Promise<T>;
+    throw lastError ?? new ExternalApiError("Threads API", "Unknown error");
   }
 
   async createContainer(userId: string, text: string): Promise<{ id: string }> {
@@ -105,6 +134,9 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
   }
 
   async publishPost(body: string): Promise<{ id: string; permalink: string }> {
+    if (body.length > 500) {
+      throw new Error(`Threads post exceeds 500 chars: ${body.length}`);
+    }
     const container = await this.createContainer(this.userId, body);
     const published = await this.publishContainer(this.userId, container.id);
     const post = await this.request<{ id: string; permalink?: string }>(
@@ -188,8 +220,13 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
   }
 
   async replyToPost(postId: string, text: string): Promise<{ id: string }> {
+    const params = new URLSearchParams({
+      media_type: "TEXT",
+      text,
+      reply_to_id: postId,
+    });
     const container = await this.request<{ id: string }>(
-      `${THREADS_API_BASE}/${this.userId}/threads?media_type=TEXT&text=${encodeURIComponent(text)}&reply_to_id=${postId}`,
+      `${THREADS_API_BASE}/${this.userId}/threads?${params.toString()}`,
       { method: "POST" },
     );
     return this.publishContainer(this.userId, container.id);

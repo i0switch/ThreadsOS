@@ -238,4 +238,35 @@ export function ensureAutonomyTables(): void {
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS research_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    topic_id TEXT NOT NULL,
+    source TEXT NOT NULL,
+    content TEXT NOT NULL,
+    evidence_type TEXT NOT NULL,
+    confidence TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS thread_post_audits (
+    id TEXT PRIMARY KEY NOT NULL,
+    draft_id TEXT NOT NULL UNIQUE,
+    verdict TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    suggestions TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS note_audits (
+    id TEXT PRIMARY KEY NOT NULL,
+    draft_id TEXT NOT NULL UNIQUE,
+    verdict TEXT NOT NULL,
+    strongest_section TEXT,
+    weakest_section TEXT,
+    rewrite_guidance TEXT,
+    score REAL NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
 }

@@ -102,23 +102,6 @@ export class DiscordWebhookNotifier implements NotifierClient {
   }
 }
 
-export class LineNotifier implements NotifierClient {
-  async send(
-    channel: NotificationChannel,
-    _content: string,
-  ): Promise<{
-    id: string;
-    channel: NotificationChannel;
-    destination: string;
-  }> {
-    logger.warn({ channel }, "LINE Notify is no longer supported");
-    throw new AppError(
-      "LINE Notify は 2025-03-31 で終了済み。File/Discord か LINE Messaging API を使って。",
-      "UNSUPPORTED_SERVICE",
-      410,
-    );
-  }
-}
 
 export function createNotifier(
   options: { discordWebhookUrl?: string; fileDir?: string } = {},

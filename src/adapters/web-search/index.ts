@@ -44,9 +44,15 @@ export class JinaSearchClient implements WebSearchClient {
       }
 
       const data = await response.json();
-      const results = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+      interface JinaSearchResult {
+        title?: string;
+        url?: string;
+        description?: string;
+      }
 
-      return results.slice(0, count).map((r: any) => ({
+      const results: JinaSearchResult[] = Array.isArray(data.data) ? data.data : (Array.isArray(data) ? data : []);
+
+      return results.slice(0, count).map((r: JinaSearchResult) => ({
         title: r.title ?? "",
         url: r.url ?? "",
         snippet: r.description ?? "",

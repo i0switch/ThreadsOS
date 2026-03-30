@@ -12,13 +12,12 @@ const envSchema = z.object({
     .default("development"),
   PORT: z.coerce.number().default(3000),
   DATABASE_URL: z.string().default("data/threads-note-os.db"),
-  THREADS_ACCESS_TOKEN: z.string().optional(),
-  THREADS_USER_ID: z.string().optional(),
-  LLM_API_KEY: z.string().optional(),
+  THREADS_ACCESS_TOKEN: z.string().min(1).optional(),
+  THREADS_USER_ID: z.string().min(1).optional(),
+  LLM_API_KEY: z.string().min(1).optional(),
   JINA_API_KEY: z.string().optional(),
   NOTE_SESSION_COOKIE: z.string().optional(),
   NOTIFICATION_DISCORD_WEBHOOK: z.string().url().optional(),
-  NOTIFICATION_LINE_TOKEN: z.string().optional(),
   MAX_POSTS_PER_HOUR: z.coerce.number().min(1).max(10).default(3),
   MAX_REPLIES_PER_HOUR: z.coerce.number().min(1).max(30).default(10),
   SCRAPER_RATE_LIMIT_MS: z.coerce.number().default(3000),
@@ -43,10 +42,24 @@ export function resolveDatabaseUrl(databaseUrl: string): string {
   return resolve(projectRoot, databaseUrl);
 }
 
+export function validateProductionEnv(env: Env): void {
+  const missing: string[] = [];
+  if (!env.THREADS_ACCESS_TOKEN) missing.push("THREADS_ACCESS_TOKEN");
+  if (!env.THREADS_USER_ID) missing.push("THREADS_USER_ID");
+  if (!env.LLM_API_KEY) missing.push("LLM_API_KEY");
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing required environment variables for production: ${missing.join(", ")}`,
+    );
+  }
+}
+
 export function loadEnv(): Env {
   const env = envSchema.parse(process.env);
-  return {
+  const resolved = {
     ...env,
     DATABASE_URL: resolveDatabaseUrl(env.DATABASE_URL),
   };
+  if (resolved.NODE_ENV === "production") validateProductionEnv(resolved);
+  return resolved;
 }

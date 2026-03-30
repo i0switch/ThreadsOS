@@ -50,6 +50,7 @@ const orchestration = new OrchestrationServiceImpl();
 const autoPublisher = new AutoPublisherServiceImpl({
   maxPostsPerHour,
   maxRepliesPerHour,
+  dryRun,
 });
 const optimizer = new CadenceOptimizerServiceImpl();
 const replyExecution = new ReplyExecutionServiceImpl(maxRepliesPerHour);
