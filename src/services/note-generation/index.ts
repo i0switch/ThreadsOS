@@ -10,6 +10,7 @@ import {
   thumbnailTasks,
 } from "../../db/schema.js";
 import type { NoteDraft, NoteIdea } from "../../domain/note/index.js";
+import { parseJsonArray } from "../../utils/llm-json.js";
 
 export interface ThumbnailTask {
   id: string;
@@ -192,12 +193,7 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
 ["タイトル1", "タイトル2", "タイトル3", "タイトル4", "タイトル5"]`;
 
     const raw = await llm.generate(prompt, { temperature: 0.8 });
-    try {
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      return jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-    } catch {
-      return [];
-    }
+    return parseJsonArray<string>(raw) ?? [];
   }
 
   async generateOutline(

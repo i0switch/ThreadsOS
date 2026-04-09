@@ -1,11 +1,13 @@
 import { AppError, ExternalApiError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 import { loadEnv } from "../../config/env.js";
+import { parseJsonArray, parseJsonObject } from "../../utils/llm-json.js";
 import { assertNoteMode, type NoteMode } from "../note-research/index.js";
 import {
   buildPublishPayload,
   buildStructuredNoteContent,
 } from "./html-builder.js";
+import { PlaywrightNoteClient } from "./playwright-client.js";
 import type {
   NoteContentContext,
   NoteIdentity,
@@ -35,6 +37,8 @@ export interface NoteApiClient {
     options?: {
       tags?: string[];
       isPaid?: boolean;
+      priceYen?: number;
+      freePreviewMarkdown?: string;
       paidBoundary?: number;
     },
   ): Promise<{ noteId: string; url: string; publishedAt?: string }>;
@@ -79,11 +83,12 @@ function authRequiredError(): AppError {
 }
 
 function safeJsonText(raw: string): unknown {
-  const match = raw.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
-  if (!match) {
-    throw new Error("Response did not contain JSON");
+  const parsed = parseJsonObject<unknown>(raw) ?? parseJsonArray<unknown>(raw);
+  if (parsed === null) {
+    throw new Error("Response did not contain parseable JSON");
   }
-  return JSON.parse(match[0]);
+
+  return parsed;
 }
 
 function asArray(value: unknown): unknown[] {
@@ -206,14 +211,74 @@ function parseNoteUrl(raw: unknown): string | null {
   return typeof url === "string" && url.length > 0 ? url : null;
 }
 
-function buildDraftContext(title: string, body: string): NoteContentContext {
+function normalizePaidContent(
+  body: string,
+  options?: {
+    isPaid?: boolean;
+    freePreviewMarkdown?: string;
+    paidBoundary?: number;
+  },
+): Pick<
+  NoteContentContext,
+  "freePreviewMarkdown" | "paidContentMarkdown" | "salesMode"
+> {
+  if (!options?.isPaid) {
+    return {
+      freePreviewMarkdown: body,
+      paidContentMarkdown: "",
+      salesMode: "normal",
+    };
+  }
+
+  const paidBoundary = options.paidBoundary;
+
+  const boundedPreview =
+    Number.isFinite(paidBoundary) && (paidBoundary ?? 0) > 0
+      ? body.slice(0, Math.floor(paidBoundary ?? 0))
+      : "";
+  const freePreviewMarkdown =
+    options.freePreviewMarkdown && options.freePreviewMarkdown.trim().length > 0
+      ? options.freePreviewMarkdown
+      : boundedPreview;
+  const paidContentMarkdown = freePreviewMarkdown
+    ? body.startsWith(freePreviewMarkdown)
+      ? body.slice(freePreviewMarkdown.length).trimStart()
+      : body
+    : body;
+
+  if (!freePreviewMarkdown || !paidContentMarkdown.trim()) {
+    return {
+      freePreviewMarkdown: body,
+      paidContentMarkdown: "",
+      salesMode: "normal",
+    };
+  }
+
+  return {
+    freePreviewMarkdown,
+    paidContentMarkdown,
+    salesMode: "free_paid",
+  };
+}
+
+export function buildDraftContext(
+  title: string,
+  body: string,
+  options?: {
+    isPaid?: boolean;
+    freePreviewMarkdown?: string;
+    paidBoundary?: number;
+  },
+): NoteContentContext {
+  const pricingContext = normalizePaidContent(body, options);
+
   return {
     jobId: Date.now(),
     title,
     noteBody: body,
-    freePreviewMarkdown: body,
-    paidContentMarkdown: "",
-    salesMode: "normal",
+    freePreviewMarkdown: pricingContext.freePreviewMarkdown,
+    paidContentMarkdown: pricingContext.paidContentMarkdown,
+    salesMode: pricingContext.salesMode,
     transitionCtaText: "",
   };
 }
@@ -313,6 +378,8 @@ export class NoteApiClientImpl implements NoteApiClient {
     options?: {
       tags?: string[];
       isPaid?: boolean;
+      priceYen?: number;
+      freePreviewMarkdown?: string;
       paidBoundary?: number;
     },
   ): Promise<{ noteId: string; url: string; publishedAt?: string }> {
@@ -330,10 +397,14 @@ export class NoteApiClientImpl implements NoteApiClient {
       },
     );
     const note = parseNoteIdentity(noteResponse);
-    const contentContext = buildDraftContext(title, body);
+    const contentContext = buildDraftContext(title, body, options);
     const structured = buildStructuredNoteContent(contentContext);
     const publishPayload = {
-      ...buildPublishPayload(note, contentContext, structured),
+      ...buildPublishPayload(
+        note,
+        { ...contentContext, priceYen: options?.priceYen },
+        structured,
+      ),
       hashtags: options?.tags ?? [],
     } satisfies PublishPayload;
 
@@ -438,6 +509,104 @@ export class NoteApiClientImpl implements NoteApiClient {
   }
 }
 
+export class PlaywrightNoteApiClient implements NoteApiClient {
+  private readonly client: PlaywrightNoteClient;
+
+  constructor() {
+    const env = loadEnv();
+    this.client = new PlaywrightNoteClient(
+      env.NOTE_STORAGE_STATE_PATH,
+      env.NOTE_PLAYWRIGHT_HEADLESS,
+    );
+  }
+
+  async getCurrentUser(): Promise<{ urlname: string }> {
+    const session = await this.client.verifySession();
+    if (!session.ok) {
+      throw new AppError(session.detail, "NOTE_SESSION_INVALID", 403);
+    }
+    // storageState があれば OK とみなす（urlname はPublish後に判明）
+    return { urlname: "playwright-user" };
+  }
+
+  async publishArticle(
+    title: string,
+    body: string,
+    options?: {
+      tags?: string[];
+      isPaid?: boolean;
+      priceYen?: number;
+      freePreviewMarkdown?: string;
+      paidBoundary?: number;
+    },
+  ): Promise<{ noteId: string; url: string; publishedAt?: string }> {
+    const result = await this.client.publishArticle({
+      title,
+      body,
+      isPaid: options?.isPaid ?? false,
+      priceYen: options?.priceYen,
+      freePreviewMarkdown: buildDraftContext(title, body, options)
+        .freePreviewMarkdown,
+      paidContentMarkdown: buildDraftContext(title, body, options)
+        .paidContentMarkdown,
+      targetState: "published",
+    });
+    return {
+      noteId: result.noteId,
+      url: result.noteUrl,
+      publishedAt: new Date().toISOString(),
+    };
+  }
+
+  async updateArticle(
+    _noteId: string,
+    _updates: { title?: string; body?: string; tags?: string[] },
+  ): Promise<void> {
+    logger.warn("[PLAYWRIGHT] updateArticle is not supported, skipping");
+  }
+
+  async getMyArticles(): Promise<NoteArticleSummary[]> {
+    try {
+      const articles = await this.client.getMyArticles();
+      return articles.map((a) => ({
+        id: a.id,
+        title: a.title,
+        url: a.url,
+        views: a.views,
+        likes: a.likes,
+        comments: a.comments,
+        publishedAt: a.publishedAt,
+      }));
+    } catch (error) {
+      logger.error(
+        { error: error instanceof Error ? error.message : String(error) },
+        "[PLAYWRIGHT] getMyArticles failed, returning empty",
+      );
+      return [];
+    }
+  }
+
+  async getArticleStats(noteId: string): Promise<{
+    views: number;
+    likes: number;
+    comments: number;
+    publishedAt?: string;
+  }> {
+    try {
+      return await this.client.getArticleStats(noteId);
+    } catch (error) {
+      logger.error(
+        {
+          noteId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "[PLAYWRIGHT] getArticleStats failed, returning zeros",
+      );
+      return { views: 0, likes: 0, comments: 0 };
+    }
+  }
+}
+
 export class DryRunNoteApiClient implements NoteApiClient {
   async getCurrentUser(): Promise<{ urlname: string }> {
     return { urlname: "dry-run" };
@@ -449,6 +618,8 @@ export class DryRunNoteApiClient implements NoteApiClient {
     _options?: {
       tags?: string[];
       isPaid?: boolean;
+      priceYen?: number;
+      freePreviewMarkdown?: string;
       paidBoundary?: number;
     },
   ): Promise<{ noteId: string; url: string; publishedAt?: string }> {

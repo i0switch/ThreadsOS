@@ -64,6 +64,9 @@ describe("Database", () => {
     expect(schema.noteAudits).toBeDefined();
     expect(schema.competitorSnapshots).toBeDefined();
     expect(schema.scheduledJobRuns).toBeDefined();
+    expect(schema.strategyStates).toBeDefined();
+    expect(schema.executiveCycles).toBeDefined();
+    expect(schema.departmentRuns).toBeDefined();
     expect(schema.humanReviewItems).toBeDefined();
   });
 });

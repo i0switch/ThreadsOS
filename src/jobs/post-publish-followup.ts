@@ -1,4 +1,4 @@
-import { ClaudeLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
+import { createLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
 import {
   DryRunThreadsApiClient,
   ThreadsGraphApiClient,
@@ -8,7 +8,7 @@ import { runJob } from "./runner.js";
 
 const dryRun = process.argv.includes("--dry-run");
 const orchestration = new OrchestrationServiceImpl();
-const llm = dryRun ? new DryRunLlmClient() : new ClaudeLlmClient();
+const llm = dryRun ? new DryRunLlmClient() : createLlmClient();
 const api = dryRun ? new DryRunThreadsApiClient() : new ThreadsGraphApiClient();
 
 await runJob(

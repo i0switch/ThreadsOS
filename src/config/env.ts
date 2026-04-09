@@ -14,9 +14,19 @@ const envSchema = z.object({
   DATABASE_URL: z.string().default("data/threads-note-os.db"),
   THREADS_ACCESS_TOKEN: z.string().min(1).optional(),
   THREADS_USER_ID: z.string().min(1).optional(),
+  THREADS_APP_ID: z.string().min(1).optional(),
+  THREADS_APP_SECRET: z.string().min(1).optional(),
   LLM_API_KEY: z.string().min(1).optional(),
+  LLM_MODE: z
+    .enum(["heartbeat", "direct", "dry-run"])
+    .default("heartbeat"),
   JINA_API_KEY: z.string().optional(),
   NOTE_SESSION_COOKIE: z.string().optional(),
+  NOTE_STORAGE_STATE_PATH: z.string().default("data/note-storage-state.json"),
+  NOTE_PLAYWRIGHT_HEADLESS: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
   NOTIFICATION_DISCORD_WEBHOOK: z.string().url().optional(),
   MAX_POSTS_PER_HOUR: z.coerce.number().min(1).max(10).default(3),
   MAX_REPLIES_PER_HOUR: z.coerce.number().min(1).max(30).default(10),
@@ -24,7 +34,7 @@ const envSchema = z.object({
   TZ: z.string().default("Asia/Tokyo"),
   NOTE_MODE: z
     .enum(["research_only", "draft_assist", "browser_assisted"])
-    .default("research_only"),
+    .default("browser_assisted"),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -46,7 +56,10 @@ export function validateProductionEnv(env: Env): void {
   const missing: string[] = [];
   if (!env.THREADS_ACCESS_TOKEN) missing.push("THREADS_ACCESS_TOKEN");
   if (!env.THREADS_USER_ID) missing.push("THREADS_USER_ID");
-  if (!env.LLM_API_KEY) missing.push("LLM_API_KEY");
+  // LLM_API_KEY は direct モード時のみ必須
+  if (env.LLM_MODE === "direct" && !env.LLM_API_KEY) {
+    missing.push("LLM_API_KEY (LLM_MODE=direct の場合必須)");
+  }
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variables for production: ${missing.join(", ")}`,

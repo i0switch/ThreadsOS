@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { and, eq, lt } from "drizzle-orm";
-import { ClaudeLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
+import { createLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
 import {
   DryRunNoteApiClient,
   NoteApiClientImpl,
+  PlaywrightNoteApiClient,
 } from "../adapters/note-api/index.js";
 import { FileSystemStorageClient } from "../adapters/storage/index.js";
 import {
@@ -13,18 +14,17 @@ import {
 import { loadEnv } from "../config/env.js";
 import { ensureAutonomyTables } from "../db/bootstrap.js";
 import { db } from "../db/index.js";
-import {
-  heartbeatStates,
-  scheduledJobRuns,
-  thumbnailTasks,
-} from "../db/schema.js";
+import { heartbeatStates, scheduledJobRuns } from "../db/schema.js";
 import { AutoPublisherServiceImpl } from "../services/auto-publisher/index.js";
 import { CadenceOptimizerServiceImpl } from "../services/cadence-optimizer/index.js";
 import { ContentSchedulerServiceImpl } from "../services/content-scheduler/index.js";
+import { DepartmentExecutionServiceImpl } from "../services/department-execution/index.js";
+import { ExecutiveServiceImpl } from "../services/executive/index.js";
 import { NoteEngagementAnalysisServiceImpl } from "../services/note-engagement-analysis/index.js";
 import { NotificationServiceImpl } from "../services/notification/index.js";
 import { OrchestrationServiceImpl } from "../services/orchestration/index.js";
 import { ReplyExecutionServiceImpl } from "../services/reply-execution/index.js";
+import { refreshToken, updateEnvFile } from "./refresh-threads-token.js";
 import { runJob } from "./runner.js";
 
 function readEnvInt(name: string, fallback: number): number {
@@ -37,15 +37,16 @@ function readEnvInt(name: string, fallback: number): number {
 const dryRun = process.argv.includes("--dry-run");
 const maxPostsPerHour = readEnvInt("MAX_POSTS_PER_HOUR", 3);
 const maxRepliesPerHour = readEnvInt("MAX_REPLIES_PER_HOUR", 10);
-const env = loadEnv();
+let env = loadEnv();
 
-const llm = dryRun ? new DryRunLlmClient() : new ClaudeLlmClient();
-const threadsApi = dryRun
+const llm = dryRun ? new DryRunLlmClient() : createLlmClient();
+let threadsApi = dryRun
   ? new DryRunThreadsApiClient()
   : new ThreadsGraphApiClient();
 const storage = new FileSystemStorageClient();
 
 const scheduler = new ContentSchedulerServiceImpl(maxPostsPerHour);
+const executive = new ExecutiveServiceImpl();
 const orchestration = new OrchestrationServiceImpl();
 const autoPublisher = new AutoPublisherServiceImpl({
   maxPostsPerHour,
@@ -56,6 +57,7 @@ const optimizer = new CadenceOptimizerServiceImpl();
 const replyExecution = new ReplyExecutionServiceImpl(maxRepliesPerHour);
 const noteEngagement = new NoteEngagementAnalysisServiceImpl();
 const notification = new NotificationServiceImpl(storage);
+let departmentExecution = createDepartmentExecution();
 
 ensureAutonomyTables();
 
@@ -66,7 +68,29 @@ function createNoteApiClient() {
   if (env.NOTE_MODE === "research_only") {
     throw new Error("NOTE_MODE が research_only のため note 公開は無効");
   }
+  if (env.NOTE_MODE === "browser_assisted") {
+    return new PlaywrightNoteApiClient();
+  }
   return new NoteApiClientImpl();
+}
+
+function createDepartmentExecution() {
+  return new DepartmentExecutionServiceImpl({
+    dryRun,
+    maxPostsPerHour,
+    llm,
+    storage,
+    threadsApi,
+    orchestration,
+    scheduler,
+    autoPublisher,
+    optimizer,
+    replyExecution,
+    noteEngagement,
+    notification,
+    runTrackedSubJob,
+    createNoteApiClient,
+  });
 }
 
 async function runTrackedSubJob(
@@ -184,6 +208,65 @@ await runJob(
       .where(eq(heartbeatStates.jobName, "hourly-heartbeat"))
       .run();
 
+    // ── トークン自動更新（週1回） ──────────────────────────────
+    const tokenState = db
+      .select()
+      .from(heartbeatStates)
+      .where(eq(heartbeatStates.jobName, "refresh-threads-token"))
+      .get();
+
+    const lastTokenRefresh = tokenState?.lastRunAt
+      ? new Date(tokenState.lastRunAt).getTime()
+      : 0;
+    const daysSinceRefresh = (Date.now() - lastTokenRefresh) / 86_400_000;
+
+    if (daysSinceRefresh >= 7 && env.THREADS_ACCESS_TOKEN && !dryRun) {
+      try {
+        logger.info("週次トークンリフレッシュを実行中...");
+        const result = await refreshToken(env.THREADS_ACCESS_TOKEN);
+        await updateEnvFile(result.access_token);
+
+        // env とクライアントを再読み込み
+        const { config: reloadDotenv } = await import("dotenv");
+        reloadDotenv({ override: true });
+        env = loadEnv();
+        if (!dryRun) {
+          threadsApi = new ThreadsGraphApiClient();
+          departmentExecution = createDepartmentExecution();
+        }
+
+        // heartbeatStatesの更新
+        if (!tokenState) {
+          db.insert(heartbeatStates)
+            .values({
+              jobName: "refresh-threads-token",
+              lastRunAt: new Date().toISOString(),
+              consecutiveFailures: 0,
+            })
+            .run();
+        } else {
+          db.update(heartbeatStates)
+            .set({
+              lastRunAt: new Date().toISOString(),
+              consecutiveFailures: 0,
+            })
+            .where(eq(heartbeatStates.jobName, "refresh-threads-token"))
+            .run();
+        }
+
+        const expiresInDays = Math.floor(result.expires_in / 86400);
+        logger.info({ expiresInDays }, "トークンリフレッシュ完了");
+      } catch (tokenErr) {
+        logger.warn(
+          {
+            error:
+              tokenErr instanceof Error ? tokenErr.message : String(tokenErr),
+          },
+          "トークンリフレッシュ失敗（処理は続行）",
+        );
+      }
+    }
+
     let isFailed = false;
     try {
       if (!dryRun) {
@@ -206,155 +289,77 @@ await runJob(
       }
 
       const actions = await scheduler.decideActions();
+      const cycle = await executive.beginHeartbeatCycle(actions);
       const results: string[] = [];
 
-      for (const action of actions) {
+      logger.info(
+        {
+          cycleId: cycle.cycleId,
+          objective: cycle.objective,
+          funnelStage: cycle.funnelStage,
+          approvedActions: cycle.approvedActions.map((action) => action.type),
+          skippedActions: cycle.skippedActions.map((item) => ({
+            type: item.action.type,
+            reason: item.reason,
+          })),
+          directives: cycle.directives,
+        },
+        "Heartbeat cycle planned by executive",
+      );
+
+      for (const action of cycle.approvedActions) {
         logger.info(
           { action: action.type, reason: action.reason },
           "Executing heartbeat action",
         );
 
+        const department = executive.resolveDepartment(action.type);
+
         try {
-          switch (action.type) {
-            case "process_human_inputs":
-              results.push(
-                await orchestration.processHumanInputs(llm, storage),
-              );
-              break;
-
-            case "research_threads":
-              results.push(
-                await runTrackedSubJob("daily-topic-research", () =>
-                  orchestration.runDailyTopicResearch(llm, storage, dryRun),
-                ),
-              );
-              break;
-
-            case "research_note":
-              results.push(
-                await runTrackedSubJob("note-competitor-research", () =>
-                  orchestration.runNoteResearch(llm, storage, dryRun),
-                ),
-              );
-              break;
-
-            case "generate_and_post": {
-              results.push(
-                await orchestration.runDailyThreadsPlan(llm, storage, dryRun),
-              );
-              if (!dryRun) {
-                await scheduler.syncThreadSlotsFromAuditedDrafts(
-                  maxPostsPerHour,
-                );
-              }
-              const published =
-                await autoPublisher.publishApprovedThreadDrafts(threadsApi);
-              results.push(`Auto-published ${published.length} threads posts`);
-              break;
-            }
-
-            case "fetch_engagement":
-              results.push(
-                await orchestration.runPostPublishFollowup(
-                  threadsApi,
-                  llm,
-                  dryRun,
-                ),
-              );
-              break;
-
-            case "reply_safe": {
-              const sent = await replyExecution.executeSafeReplies(threadsApi);
-              results.push(`Sent ${sent} safe replies`);
-              break;
-            }
-
-            case "generate_note": {
-              const nextNoteSlot = await scheduler.getNextNoteSlot();
-              const hasDueNoteSlot = nextNoteSlot
-                ? new Date(nextNoteSlot.scheduledAt).getTime() <= Date.now()
-                : false;
-
-              if (!hasDueNoteSlot) {
-                results.push(
-                  await runTrackedSubJob("nightly-note-pipeline", () =>
-                    orchestration.runNightlyNotePipeline(llm, storage, dryRun),
-                  ),
-                );
-                if (!dryRun) {
-                  const seededNotes =
-                    await scheduler.syncNoteSlotsFromAuditedDrafts(1);
-                  if (seededNotes > 0) {
-                    results.push(`Seeded ${seededNotes} note slots`);
-                  }
-                }
-              }
-
-              const noteApi = createNoteApiClient();
-              const noteResults =
-                await autoPublisher.publishApprovedNoteDrafts(noteApi);
-              results.push(`Auto-published ${noteResults.length} notes`);
-
-              if (!dryRun) {
-                for (const published of noteResults) {
-                  db.insert(thumbnailTasks)
-                    .values({
-                      id: randomUUID(),
-                      noteDraftId: published.draftId ?? published.id,
-                      status: "pending",
-                      instruction: `note公開済み。サムネを設定して: ${published.url}`,
-                      createdAt: new Date().toISOString(),
-                      completedAt: null,
-                    })
-                    .run();
-                  await notification.sendNotification({
-                    type: "action_needed",
-                    message: `note公開済み。サムネ設定して: ${published.url}`,
-                  });
-                }
-
-                if (noteResults.length > 0) {
-                  await noteEngagement.fetchAndStoreNoteResults(noteApi);
-                  await noteEngagement.generateNoteImprovements(llm);
-                }
-              }
-              break;
-            }
-
-            case "weekly_retro":
-              results.push(
-                await runTrackedSubJob("weekly-retro", () =>
-                  orchestration.runWeeklyRetro(llm, storage, dryRun),
-                ),
-              );
-              break;
-
-            case "optimize_schedule":
-              await optimizer.analyzeAndUpdate(llm);
-              results.push("Schedule optimized");
-              break;
-
-            case "notify": {
-              const report = await notification.generateProgressReport();
-              await notification.sendNotification({ type: "progress", report });
-              results.push("Progress notification sent");
-              break;
-            }
-          }
+          const execution = await departmentExecution.execute(action);
+          results.push(execution.summary);
+          await executive.recordDepartmentRun({
+            cycleId: cycle.cycleId,
+            department: execution.department,
+            phase: execution.phase,
+            status: execution.status,
+            summary: execution.summary,
+            payload: {
+              reason: action.reason,
+              objective: cycle.objective,
+              ...execution.payload,
+            },
+          });
         } catch (actionError) {
           const message =
             actionError instanceof Error
               ? actionError.message
               : String(actionError);
           logger.error(
-            { action: action.type, error: message },
+            { action: action.type, error: message, stack: actionError instanceof Error ? actionError.stack : undefined },
             "Action failed, continuing",
           );
           results.push(`FAILED: ${action.type} - ${message}`);
+          await executive.recordDepartmentRun({
+            cycleId: cycle.cycleId,
+            department,
+            phase: action.type,
+            status: "failed",
+            summary: message,
+            payload: {
+              reason: action.reason,
+              objective: cycle.objective,
+            },
+          });
         }
       }
 
       isFailed = results.some((r) => r.startsWith("FAILED:"));
+      await executive.completeHeartbeatCycle(
+        cycle.cycleId,
+        isFailed ? "failed" : "completed",
+        results.join("\n"),
+      );
       return results.join("\n");
     } catch (err) {
       isFailed = true;
@@ -363,7 +368,11 @@ await runJob(
       const prevFailures = current?.consecutiveFailures ?? 0;
       const newFailures = isFailed ? prevFailures + 1 : 0;
 
-      if (isFailed && newFailures >= 5 && (newFailures === 5 || newFailures % 5 === 0)) {
+      if (
+        isFailed &&
+        newFailures >= 5 &&
+        (newFailures === 5 || newFailures % 5 === 0)
+      ) {
         await notification
           .sendNotification({
             type: "critical",
@@ -372,7 +381,11 @@ await runJob(
           .catch((e) =>
             logger.error({ error: String(e) }, "Failed to send critical alert"),
           );
-      } else if (isFailed && newFailures >= 3 && (newFailures === 3 || newFailures % 3 === 0)) {
+      } else if (
+        isFailed &&
+        newFailures >= 3 &&
+        (newFailures === 3 || newFailures % 3 === 0)
+      ) {
         await notification
           .sendNotification({
             type: "alert",

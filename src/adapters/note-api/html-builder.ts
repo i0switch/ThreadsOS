@@ -264,7 +264,7 @@ export function buildStructuredNoteContent(
 
 export function buildPublishPayload(
   note: NoteIdentity,
-  context: NoteContentContext,
+  context: NoteContentContext & { priceYen?: number },
   structured: StructuredNoteContent,
 ): PublishPayload {
   const saleSettingRequested =
@@ -288,7 +288,7 @@ export function buildPublishPayload(
     magazine_keys: [],
     name: context.title,
     pay_body: saleSettingRequested ? structured.paidHtml : "",
-    price: saleSettingRequested ? 300 : 0,
+    price: saleSettingRequested ? (context.priceYen ?? 300) : 0,
     send_notifications_flag: true,
     separator: saleSettingRequested ? structured.separator : null,
     slug: note.slug,

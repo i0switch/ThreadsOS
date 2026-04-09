@@ -18,7 +18,7 @@ describe("loadEnv", () => {
       resolveDatabaseUrl("data/threads-note-os.db"),
     );
     expect(isAbsolute(env.DATABASE_URL)).toBe(true);
-    expect(env.NOTE_MODE).toBe("research_only");
+    expect(env.NOTE_MODE).toBe("browser_assisted");
   });
 
   it("should keep in-memory database urls unchanged", () => {

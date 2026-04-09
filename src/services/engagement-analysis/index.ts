@@ -15,6 +15,7 @@ import {
   topics,
 } from "../../db/schema.js";
 import type { ImprovementInsight } from "../../domain/analytics/index.js";
+import { parseJsonArray, parseJsonObject } from "../../utils/llm-json.js";
 
 type PerformanceBucket = {
   posts: number;
@@ -40,6 +41,10 @@ export interface EngagementAnalysisService {
   fetchAndStoreResults(
     draftId: string,
     threadsPostId: string,
+    api: ThreadsApiClient,
+  ): Promise<void>;
+  refreshPostMetrics(
+    postResultId: string,
     api: ThreadsApiClient,
   ): Promise<void>;
   fetchAndClassifyReplies(
@@ -358,7 +363,27 @@ export class EngagementAnalysisServiceImpl
     threadsPostId: string,
     api: ThreadsApiClient,
   ): Promise<void> {
-    const insights = await api.getInsights(threadsPostId);
+    let insights: Awaited<ReturnType<ThreadsApiClient["getInsights"]>>;
+    try {
+      insights = await api.getInsights(threadsPostId);
+    } catch (error) {
+      logger.warn(
+        {
+          draftId,
+          threadsPostId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to fetch initial Threads insights, storing zeroed metrics",
+      );
+      insights = {
+        impressions: 0,
+        likes: 0,
+        replies: 0,
+        shares: 0,
+        views: 0,
+      };
+    }
+
     const id = randomUUID();
     const now = new Date().toISOString();
 
@@ -377,6 +402,65 @@ export class EngagementAnalysisServiceImpl
       .run();
 
     logger.info({ draftId, threadsPostId }, "Post results stored");
+  }
+
+  async refreshPostMetrics(
+    postResultId: string,
+    api: ThreadsApiClient,
+  ): Promise<void> {
+    const postResult = db
+      .select()
+      .from(threadPostResults)
+      .where(eq(threadPostResults.id, postResultId))
+      .get();
+    if (!postResult) {
+      logger.warn({ postResultId }, "Post result not found for metric refresh");
+      return;
+    }
+
+    let insights: Awaited<ReturnType<ThreadsApiClient["getInsights"]>>;
+    try {
+      insights = await api.getInsights(postResult.threadsPostId);
+    } catch (error) {
+      logger.warn(
+        {
+          postResultId,
+          threadsPostId: postResult.threadsPostId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to refresh Threads insights, keeping previous metrics",
+      );
+      return;
+    }
+
+    if (!insights) {
+      logger.warn(
+        { postResultId },
+        "getInsights returned undefined, skipping metrics update",
+      );
+      return;
+    }
+
+    db.update(threadPostResults)
+      .set({
+        impressions: insights.impressions,
+        likes: insights.likes,
+        repliesCount: insights.replies,
+        shares: insights.shares,
+      })
+      .where(eq(threadPostResults.id, postResultId))
+      .run();
+
+    logger.info(
+      {
+        postResultId,
+        impressions: insights.impressions,
+        likes: insights.likes,
+        replies: insights.replies,
+        shares: insights.shares,
+      },
+      "Post metrics refreshed from Threads API",
+    );
   }
 
   async fetchAndClassifyReplies(
@@ -446,14 +530,12 @@ export class EngagementAnalysisServiceImpl
         autoReplyBody?: string;
         reason?: string;
       };
-      try {
-        const jsonMatch = raw.match(/\{[\s\S]*\}/);
-        classification = jsonMatch
-          ? JSON.parse(jsonMatch[0])
-          : { decision: "human_review", sentiment: "neutral" };
-      } catch {
-        classification = { decision: "human_review", sentiment: "neutral" };
-      }
+      classification = parseJsonObject<{
+        decision: string;
+        sentiment: string;
+        autoReplyBody?: string;
+        reason?: string;
+      }>(raw) ?? { decision: "human_review", sentiment: "neutral" };
 
       db.update(threadReplies)
         .set({ sentiment: classification.sentiment })
@@ -552,13 +634,10 @@ export class EngagementAnalysisServiceImpl
 action は「何をどう変えるか」がすぐ分かる粒度で返してください。`;
 
     const raw = await llm.generate(prompt, { temperature: 0.5 });
-    let parsed: Array<{ insight: string; action: string; priority: string }>;
-    try {
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-    } catch {
-      parsed = [];
-    }
+    const parsed =
+      parseJsonArray<{ insight: string; action: string; priority: string }>(
+        raw,
+      ) ?? [];
 
     db.delete(improvementInsights)
       .where(

@@ -6,6 +6,7 @@ import {
   normalizeBlocks,
   parseInlineMarkdown,
 } from "../src/adapters/note-api/html-builder.js";
+import { buildDraftContext } from "../src/adapters/note-api/index.js";
 import type { NoteContentContext } from "../src/adapters/note-api/types.js";
 
 const makeContext = (
@@ -95,6 +96,23 @@ describe("buildStructuredNoteContent", () => {
     expect(structured.fullHtml).toContain(structured.freeHtml);
     expect(structured.fullHtml).toContain(structured.paidHtml);
     expect(structured.bodyLength).toBeGreaterThan(0);
+  });
+});
+
+describe("buildDraftContext", () => {
+  it("splits paid note bodies into free preview and paid remainder", () => {
+    const body = "導入\n\nここから本文\n\n結論";
+    const preview = "導入";
+
+    const context = buildDraftContext("有料記事", body, {
+      isPaid: true,
+      freePreviewMarkdown: preview,
+    });
+
+    expect(context.salesMode).toBe("free_paid");
+    expect(context.freePreviewMarkdown).toBe(preview);
+    expect(context.paidContentMarkdown).toContain("ここから本文");
+    expect(context.paidContentMarkdown).not.toContain("導入\n\n導入");
   });
 });
 

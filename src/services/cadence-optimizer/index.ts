@@ -8,6 +8,7 @@ import {
   optimizationDecisions,
   threadPostResults,
 } from "../../db/schema.js";
+import { parseJsonObject } from "../../utils/llm-json.js";
 
 const JST_TIME_ZONE = "Asia/Tokyo";
 const DAY_MS = 86_400_000;
@@ -160,14 +161,12 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
 
     try {
       const raw = await llm.generate(prompt, { temperature: 0.3 });
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) {
+      const parsed =
+        parseJsonObject<Partial<typeof DEFAULT_FREQUENCY_RECOMMENDATION>>(raw);
+      if (!parsed) {
         return JSON.stringify(DEFAULT_FREQUENCY_RECOMMENDATION);
       }
 
-      const parsed = JSON.parse(jsonMatch[0]) as Partial<
-        typeof DEFAULT_FREQUENCY_RECOMMENDATION
-      >;
       const recommendedPostsPerDay = Number(parsed.recommendedPostsPerDay);
       const minIntervalHours = Number(parsed.minIntervalHours);
 

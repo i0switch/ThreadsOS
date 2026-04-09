@@ -245,6 +245,25 @@ export const thumbnailTasks = sqliteTable("thumbnail_tasks", {
   completedAt: text("completed_at"),
 });
 
+export const LLM_TASK_STATUSES = [
+  "pending",
+  "processing",
+  "done",
+  "error",
+] as const;
+
+export const llmTaskQueue = sqliteTable("llm_task_queue", {
+  id: text("id").primaryKey(),
+  status: text("status").notNull().default("pending"),
+  prompt: text("prompt").notNull(),
+  systemPrompt: text("system_prompt"),
+  optionsJson: text("options_json"),
+  result: text("result"),
+  error: text("error"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const heartbeatStates = sqliteTable("heartbeat_states", {
   jobName: text("job_name").primaryKey(),
   lastRunAt: text("last_run_at"),
@@ -280,6 +299,39 @@ export const scheduledJobRuns = sqliteTable("scheduled_job_runs", {
   finishedAt: text("finished_at"),
   dryRun: integer("dry_run").notNull().default(0),
   resultSummary: text("result_summary"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const strategyStates = sqliteTable("strategy_states", {
+  key: text("key").primaryKey(),
+  scope: text("scope").notNull(),
+  stateJson: text("state_json").notNull(),
+  summary: text("summary"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const executiveCycles = sqliteTable("executive_cycles", {
+  id: text("id").primaryKey(),
+  objective: text("objective").notNull(),
+  funnelStage: text("funnel_stage").notNull(),
+  strategyKey: text("strategy_key").notNull(),
+  status: text("status").notNull().default("running"),
+  decisionJson: text("decision_json").notNull(),
+  summary: text("summary"),
+  startedAt: text("started_at").notNull(),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const departmentRuns = sqliteTable("department_runs", {
+  id: text("id").primaryKey(),
+  cycleId: text("cycle_id").notNull(),
+  department: text("department").notNull(),
+  phase: text("phase").notNull(),
+  status: text("status").notNull(),
+  summary: text("summary").notNull(),
+  payloadJson: text("payload_json"),
   createdAt: text("created_at").notNull(),
 });
 

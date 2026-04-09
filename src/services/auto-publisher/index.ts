@@ -41,6 +41,56 @@ export interface AutoPublisherService {
   sendSafeReplies(api: ThreadsApiClient): Promise<number>;
 }
 
+// ---------------------------------------------------------------------------
+// Pricing logic for note articles
+// ---------------------------------------------------------------------------
+
+interface NotePricingResult {
+  isPaid: boolean;
+  priceYen: number;
+  freePreviewMarkdown: string | undefined;
+}
+
+function determineNotePrice(bodyText: string): NotePricingResult {
+  const charCount = bodyText.length;
+
+  if (charCount < 3000) {
+    return { isPaid: false, priceYen: 0, freePreviewMarkdown: undefined };
+  }
+
+  let priceYen: number;
+  if (charCount < 5000) {
+    priceYen = 690;
+  } else if (charCount < 8000) {
+    priceYen = 980;
+  } else {
+    priceYen = 1480;
+  }
+
+  // Free preview: first 30% of the body, capped at 2000 characters
+  const previewLength = Math.min(Math.floor(charCount * 0.3), 2000);
+  const freePreviewMarkdown = bodyText.slice(0, previewLength);
+
+  return { isPaid: true, priceYen, freePreviewMarkdown };
+}
+
+function buildNotePromotionBody(title: string, noteUrl: string): string {
+  const segments = [
+    `noteを公開しました。`,
+    `テーマ: ${title}`,
+    "実務でそのまま使える形まで整理しています。",
+    `続きはこちら ${noteUrl}`,
+  ];
+
+  let body = segments.join("\n\n");
+  if (body.length <= 500) {
+    return body;
+  }
+
+  body = [segments[0], segments[1], `続きはこちら ${noteUrl}`].join("\n\n");
+  return body.slice(0, 500);
+}
+
 export class AutoPublisherServiceImpl implements AutoPublisherService {
   private readonly maxPostsPerHour: number;
   private readonly maxRepliesPerHour: number;
@@ -54,10 +104,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
     this.dryRun = options.dryRun ?? false;
   }
 
-  async publishApprovedThreadDrafts(
-    api: ThreadsApiClient,
-  ): Promise<PublishResult[]> {
-    const now = new Date().toISOString();
+  private getEligibleThreadSlots(now: string) {
     const dueSlots = db
       .select()
       .from(contentSlots)
@@ -72,8 +119,107 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
       .limit(this.maxPostsPerHour)
       .all();
 
+    return dueSlots
+      .map((slot) => {
+        const draft = slot.draftId
+          ? db
+              .select()
+              .from(threadPostDrafts)
+              .where(eq(threadPostDrafts.id, slot.draftId))
+              .get()
+          : null;
+        return { slot, draft };
+      })
+      .filter(({ slot, draft }) =>
+        Boolean(slot.draftId && draft?.status === "audited"),
+      );
+  }
+
+  private getEligibleNoteSlots(now: string) {
+    const dueSlots = db
+      .select()
+      .from(contentSlots)
+      .where(
+        and(
+          eq(contentSlots.channel, "note"),
+          eq(contentSlots.status, "pending"),
+          lte(contentSlots.scheduledAt, now),
+        ),
+      )
+      .orderBy(desc(contentSlots.priority), contentSlots.scheduledAt)
+      .limit(1)
+      .all();
+
+    return dueSlots
+      .map((slot) => {
+        const draft = slot.draftId
+          ? db
+              .select()
+              .from(noteDrafts)
+              .where(eq(noteDrafts.id, slot.draftId))
+              .get()
+          : null;
+        return { slot, draft };
+      })
+      .filter(({ slot, draft }) =>
+        Boolean(
+          slot.draftId &&
+            draft?.status === "audited" &&
+            (draft.publishReadinessScore ?? 0) >= 7,
+        ),
+      );
+  }
+
+  private createNotePromotionDraft(
+    noteDraftId: string,
+    noteIdeaId: string,
+    title: string,
+    noteUrl: string,
+    createdAt: string,
+  ): void {
+    const idea = db
+      .select()
+      .from(noteIdeas)
+      .where(eq(noteIdeas.id, noteIdeaId))
+      .get();
+    const topicId = idea?.sourceTopicId;
+
+    if (!topicId) {
+      logger.warn(
+        { noteDraftId, noteIdeaId },
+        "Skipping note promotion draft because source topic is missing",
+      );
+      return;
+    }
+
+    db.insert(threadPostDrafts)
+      .values({
+        id: randomUUID(),
+        topicId,
+        body: buildNotePromotionBody(title, noteUrl),
+        hookType: "benefit",
+        ctaType: "link",
+        noteTransition: noteUrl,
+        status: "audited",
+        createdAt,
+        updatedAt: createdAt,
+      })
+      .run();
+
+    logger.info(
+      { noteDraftId, topicId, noteUrl },
+      "Created note promotion Threads draft",
+    );
+  }
+
+  async publishApprovedThreadDrafts(
+    api: ThreadsApiClient,
+  ): Promise<PublishResult[]> {
+    const now = new Date().toISOString();
+    const eligibleSlots = this.getEligibleThreadSlots(now);
+
     if (this.dryRun) {
-      return dueSlots.map((slot) => ({
+      return eligibleSlots.map(({ slot }) => ({
         id: slot.draftId ?? slot.id,
         url: `dry-run://threads/${slot.id}`,
         type: "threads",
@@ -82,18 +228,13 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
 
     const results: PublishResult[] = [];
 
-    for (const slot of dueSlots) {
+    for (const { slot, draft } of eligibleSlots) {
       if (!slot.draftId) {
         logger.warn({ slotId: slot.id }, "Thread slot is missing a draft id");
         await this.skipSlot(slot.id);
         continue;
       }
 
-      const draft = db
-        .select()
-        .from(threadPostDrafts)
-        .where(eq(threadPostDrafts.id, slot.draftId))
-        .get();
       if (!draft || draft.status !== "audited") {
         logger.warn(
           { slotId: slot.id, draftId: slot.draftId },
@@ -150,22 +291,10 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
     noteApi: NoteApiClient,
   ): Promise<PublishResult[]> {
     const now = new Date().toISOString();
-    const dueSlots = db
-      .select()
-      .from(contentSlots)
-      .where(
-        and(
-          eq(contentSlots.channel, "note"),
-          eq(contentSlots.status, "pending"),
-          lte(contentSlots.scheduledAt, now),
-        ),
-      )
-      .orderBy(desc(contentSlots.priority), contentSlots.scheduledAt)
-      .limit(1)
-      .all();
+    const eligibleSlots = this.getEligibleNoteSlots(now);
 
     if (this.dryRun) {
-      return dueSlots.map((slot) => ({
+      return eligibleSlots.map(({ slot }) => ({
         id: slot.draftId ?? slot.id,
         url: `dry-run://note/${slot.id}`,
         type: "note",
@@ -174,18 +303,13 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
     }
 
     const results: PublishResult[] = [];
-    for (const slot of dueSlots) {
+    for (const { slot, draft } of eligibleSlots) {
       if (!slot.draftId) {
         logger.warn({ slotId: slot.id }, "Note slot is missing a draft id");
         await this.skipSlot(slot.id);
         continue;
       }
 
-      const draft = db
-        .select()
-        .from(noteDrafts)
-        .where(eq(noteDrafts.id, slot.draftId))
-        .get();
       if (
         !draft ||
         draft.status !== "audited" ||
@@ -202,10 +326,26 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
       await this.reserveSlot(slot.id, draft.id);
 
       try {
+        const pricing = determineNotePrice(draft.body);
+        logger.info(
+          {
+            draftId: draft.id,
+            charCount: draft.body.length,
+            isPaid: pricing.isPaid,
+            priceYen: pricing.priceYen,
+          },
+          "Determined note pricing",
+        );
+
         const published = await noteApi.publishArticle(
           draft.title,
           draft.body,
-          { tags: [] },
+          {
+            tags: [],
+            isPaid: pricing.isPaid,
+            priceYen: pricing.priceYen,
+            freePreviewMarkdown: pricing.freePreviewMarkdown,
+          },
         );
         const publishedAt = new Date().toISOString();
 
@@ -236,6 +376,14 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           })
           .where(eq(noteIdeas.id, draft.ideaId))
           .run();
+
+        this.createNotePromotionDraft(
+          draft.id,
+          draft.ideaId,
+          draft.title,
+          published.url,
+          publishedAt,
+        );
 
         await this.completeSlot(slot.id);
 

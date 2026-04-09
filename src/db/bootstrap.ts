@@ -164,6 +164,39 @@ export function ensureAutonomyTables(): void {
     created_at TEXT NOT NULL
   )`);
 
+  db.run(sql`CREATE TABLE IF NOT EXISTS strategy_states (
+    key TEXT PRIMARY KEY NOT NULL,
+    scope TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    summary TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS executive_cycles (
+    id TEXT PRIMARY KEY NOT NULL,
+    objective TEXT NOT NULL,
+    funnel_stage TEXT NOT NULL,
+    strategy_key TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    decision_json TEXT NOT NULL,
+    summary TEXT,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS department_runs (
+    id TEXT PRIMARY KEY NOT NULL,
+    cycle_id TEXT NOT NULL,
+    department TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    status TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    payload_json TEXT,
+    created_at TEXT NOT NULL
+  )`);
+
   db.run(sql`CREATE TABLE IF NOT EXISTS operator_profiles (
     id TEXT PRIMARY KEY NOT NULL,
     primary_niche TEXT NOT NULL,
@@ -269,4 +302,21 @@ export function ensureAutonomyTables(): void {
     score REAL NOT NULL,
     created_at TEXT NOT NULL
   )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS llm_task_queue (
+    id TEXT PRIMARY KEY NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    prompt TEXT NOT NULL,
+    system_prompt TEXT,
+    options_json TEXT,
+    result TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS human_review_items_item_type_item_id_unique
+    ON human_review_items (item_type, item_id)`),
+  );
 }

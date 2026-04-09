@@ -5,6 +5,7 @@ import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import { humanReviewItems, noteAudits, noteDrafts } from "../../db/schema.js";
 import type { NoteAudit } from "../../domain/note/index.js";
+import { parseJsonObject } from "../../utils/llm-json.js";
 
 const NOTE_AUDIT_CRITERIA = [
   "タイトルが弱い",
@@ -79,18 +80,25 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       rewriteGuidance: string;
       score: number;
     };
-    try {
-      const jsonMatch = raw.match(/\{[\s\S]*\}/);
-      parsed = jsonMatch
-        ? JSON.parse(jsonMatch[0])
-        : {
-            verdict: "human_review",
-            strongestSection: "",
-            weakestSection: "",
-            rewriteGuidance: "",
-            score: 5,
-          };
-    } catch {
+    parsed = parseJsonObject<{
+      verdict: string;
+      strongestSection: string;
+      weakestSection: string;
+      rewriteGuidance: string;
+      score: number;
+    }>(raw) ?? {
+      verdict: "human_review",
+      strongestSection: "",
+      weakestSection: "",
+      rewriteGuidance: "",
+      score: 5,
+    };
+
+    if (
+      !parsed.strongestSection &&
+      !parsed.weakestSection &&
+      !parsed.rewriteGuidance
+    ) {
       parsed = {
         verdict: "human_review",
         strongestSection: "",
@@ -100,6 +108,8 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       };
     }
 
+    const normalizedScore =
+      parsed.verdict === "pass" ? Math.max(parsed.score, 7) : parsed.score;
     const now = new Date().toISOString();
     const existingAudit = db
       .select()
@@ -107,7 +117,8 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       .where(eq(noteAudits.draftId, draftId))
       .get();
     const id = existingAudit?.id ?? randomUUID();
-    const needsReview = parsed.score < 7 || parsed.verdict === "human_review";
+    const needsReview =
+      parsed.verdict === "human_review" || normalizedScore <= 2;
     const existingReviewItem = db
       .select()
       .from(humanReviewItems)
@@ -126,7 +137,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
           strongestSection: parsed.strongestSection,
           weakestSection: parsed.weakestSection,
           rewriteGuidance: parsed.rewriteGuidance,
-          score: parsed.score,
+          score: normalizedScore,
           createdAt: now,
         })
         .where(eq(noteAudits.draftId, draftId))
@@ -140,7 +151,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
           strongestSection: parsed.strongestSection,
           weakestSection: parsed.weakestSection,
           rewriteGuidance: parsed.rewriteGuidance,
-          score: parsed.score,
+          score: normalizedScore,
           createdAt: now,
         })
         .run();
@@ -154,7 +165,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
             : parsed.verdict === "reject"
               ? "rejected"
               : "draft",
-        publishReadinessScore: parsed.score,
+        publishReadinessScore: normalizedScore,
         updatedAt: now,
       })
       .where(eq(noteDrafts.id, draftId))
@@ -162,7 +173,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 
     if (needsReview) {
       const reviewReason = buildReviewReason(
-        parsed.score,
+        normalizedScore,
         parsed.weakestSection,
         parsed.rewriteGuidance,
       );
@@ -189,7 +200,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
           .run();
       }
       logger.warn(
-        { draftId, score: parsed.score },
+        { draftId, score: normalizedScore },
         "Note draft sent to human review",
       );
     } else if (existingReviewItem && existingReviewItem.status === "pending") {
@@ -204,7 +215,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
     }
 
     logger.info(
-      { draftId, verdict: parsed.verdict, score: parsed.score },
+      { draftId, verdict: parsed.verdict, score: normalizedScore },
       "Note draft audited",
     );
 
@@ -215,7 +226,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       strongestSection: parsed.strongestSection,
       weakestSection: parsed.weakestSection,
       rewriteGuidance: parsed.rewriteGuidance,
-      score: parsed.score,
+      score: normalizedScore,
     };
   }
 

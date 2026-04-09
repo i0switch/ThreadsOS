@@ -39,6 +39,15 @@ const userProfileResponseSchema = z.object({
   username: z.string(),
   threads_profile_picture_url: z.string().optional(),
 });
+const insightMetricNames = ["views", "likes", "replies", "shares"] as const;
+const insightMetricAliases: Record<InsightMetricName, readonly string[]> = {
+  views: ["views", "impressions"],
+  likes: ["likes"],
+  replies: ["replies"],
+  shares: ["shares", "reposts"],
+};
+
+type InsightMetricName = (typeof insightMetricNames)[number];
 
 export class ThreadsGraphApiClient implements ThreadsApiClient {
   private accessToken: string;
@@ -80,13 +89,22 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
 
       if (status === 429) {
         if (attempt >= 1) {
-          throw new ExternalApiError("Threads API", `429 (rate limit): ${errorBody}`);
+          throw new ExternalApiError(
+            "Threads API",
+            `429 (rate limit): ${errorBody}`,
+          );
         }
         const retryAfter = response.headers.get("Retry-After");
         const waitMs = retryAfter ? Number(retryAfter) * 1000 : 60_000;
-        logger.warn({ status, waitMs, attempt }, "Threads API 429 – retrying after wait");
+        logger.warn(
+          { status, waitMs, attempt },
+          "Threads API 429 – retrying after wait",
+        );
         await new Promise((r) => setTimeout(r, waitMs));
-        lastError = new ExternalApiError("Threads API", `${status}: ${errorBody}`);
+        lastError = new ExternalApiError(
+          "Threads API",
+          `${status}: ${errorBody}`,
+        );
         continue;
       }
 
@@ -95,9 +113,15 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
           throw new ExternalApiError("Threads API", `${status}: ${errorBody}`);
         }
         const waitMs = 1000 * 2 ** attempt;
-        logger.warn({ status, waitMs, attempt }, "Threads API 5xx – retrying with backoff");
+        logger.warn(
+          { status, waitMs, attempt },
+          "Threads API 5xx – retrying with backoff",
+        );
         await new Promise((r) => setTimeout(r, waitMs));
-        lastError = new ExternalApiError("Threads API", `${status}: ${errorBody}`);
+        lastError = new ExternalApiError(
+          "Threads API",
+          `${status}: ${errorBody}`,
+        );
         continue;
       }
 
@@ -172,6 +196,102 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
     }));
   }
 
+  private buildInsightsUrl(
+    postId: string,
+    metricNames: readonly string[],
+  ): string {
+    const params = new URLSearchParams();
+    for (const metric of metricNames) {
+      params.append("metric", metric);
+    }
+    return `${THREADS_API_BASE}/${postId}/insights?${params.toString()}`;
+  }
+
+  private async fetchInsightsMetrics(
+    postId: string,
+    metricNames: readonly InsightMetricName[],
+  ): Promise<Record<InsightMetricName, number>> {
+    const metrics = Object.fromEntries(
+      metricNames.map((metric) => [metric, 0]),
+    ) as Record<InsightMetricName, number>;
+    const remainingMetrics = new Set<InsightMetricName>(metricNames);
+
+    try {
+      const result = await this.request<{
+        data: Array<{ name: string; values: Array<{ value: number }> }>;
+      }>(this.buildInsightsUrl(postId, metricNames));
+
+      for (const item of result.data ?? []) {
+        if (metricNames.includes(item.name as InsightMetricName)) {
+          metrics[item.name as InsightMetricName] =
+            item.values?.[0]?.value ?? 0;
+          remainingMetrics.delete(item.name as InsightMetricName);
+        }
+      }
+
+      if (remainingMetrics.size === 0) {
+        return metrics;
+      }
+
+      logger.warn(
+        { postId, missingMetrics: [...remainingMetrics] },
+        "Threads insights response was partial, fetching missing metrics individually",
+      );
+    } catch (error) {
+      logger.warn(
+        {
+          postId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Bulk Threads insights request failed, retrying per metric",
+      );
+    }
+
+    for (const metric of remainingMetrics) {
+      metrics[metric] = await this.fetchSingleInsightMetric(postId, metric);
+    }
+
+    return metrics;
+  }
+
+  private async fetchSingleInsightMetric(
+    postId: string,
+    metric: InsightMetricName,
+  ): Promise<number> {
+    const aliases = insightMetricAliases[metric] ?? [metric];
+
+    for (const alias of aliases) {
+      try {
+        const result = await this.request<{
+          data: Array<{ name: string; values: Array<{ value: number }> }>;
+        }>(this.buildInsightsUrl(postId, [alias]));
+
+        const matchedMetric = result.data?.find((item) =>
+          aliases.includes(item.name),
+        );
+        if (matchedMetric) {
+          return matchedMetric.values?.[0]?.value ?? 0;
+        }
+      } catch (error) {
+        logger.warn(
+          {
+            postId,
+            metric,
+            alias,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Threads single insight metric request failed",
+        );
+      }
+    }
+
+    logger.warn(
+      { postId, metric },
+      "Threads insight metric unavailable, defaulting to zero",
+    );
+    return 0;
+  }
+
   async getInsights(postId: string): Promise<{
     impressions: number;
     likes: number;
@@ -179,23 +299,14 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
     shares: number;
     views: number;
   }> {
-    const result = await this.request<{
-      data: Array<{ name: string; values: Array<{ value: number }> }>;
-    }>(
-      `${THREADS_API_BASE}/${postId}/insights?metric=impressions,likes,replies,shares,views`,
-    );
-
-    const metrics: Record<string, number> = {};
-    for (const m of result.data ?? []) {
-      metrics[m.name] = m.values?.[0]?.value ?? 0;
-    }
+    const metrics = await this.fetchInsightsMetrics(postId, insightMetricNames);
 
     return {
-      impressions: metrics.impressions ?? 0,
-      likes: metrics.likes ?? 0,
-      replies: metrics.replies ?? 0,
-      shares: metrics.shares ?? 0,
-      views: metrics.views ?? 0,
+      impressions: metrics.views,
+      likes: metrics.likes,
+      replies: metrics.replies,
+      shares: metrics.shares,
+      views: metrics.views,
     };
   }
 

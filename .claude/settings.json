@@ -12,7 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"C:/Users/i0swi/OneDrive/デスクトップ/ThreadsOS/.claude/hooks/enforce-codex-delegate.sh\""
+            "command": "bash \"C:/Users/i0swi/.claude/hooks/enforce-codex-delegate.sh\""
           }
         ]
       }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import {
   contentSlots,
@@ -10,6 +10,7 @@ import {
   outboundNotifications,
   replyDecisions,
   scheduledJobRuns,
+  strategyStates,
   threadPostDrafts,
   threadPostResults,
   topics,
@@ -47,6 +48,16 @@ export interface ContentSchedulerService {
   completeSlot(slotId: string): Promise<void>;
   skipSlot(slotId: string): Promise<void>;
 }
+
+const STRATEGY_STATE_KEY = "heartbeat:global";
+
+type PersistedStrategyState = {
+  objective?:
+    | "directive_assimilation"
+    | "funnel_expansion"
+    | "engagement_compounding";
+  funnelStage?: "bootstrap" | "distribution" | "conversion" | "optimization";
+};
 
 function getJstHour(date = new Date()): number {
   return Number(
@@ -109,11 +120,103 @@ function nextJstPublicationTime(baseTime = new Date(), hour = 21): Date {
   return candidate;
 }
 
+function loadPersistedStrategyState(): PersistedStrategyState | null {
+  const row = db
+    .select()
+    .from(strategyStates)
+    .where(eq(strategyStates.key, STRATEGY_STATE_KEY))
+    .get();
+  if (!row) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(row.stateJson) as PersistedStrategyState;
+  } catch {
+    return null;
+  }
+}
+
+function adjustPriority(priority: number, delta: number): number {
+  return Math.max(1, priority + delta);
+}
+
+function applyStrategyBias(actions: ScheduledAction[]): ScheduledAction[] {
+  const strategy = loadPersistedStrategyState();
+  if (!strategy) {
+    return actions;
+  }
+
+  return actions
+    .map((action) => {
+      let delta = 0;
+
+      switch (strategy.objective) {
+        case "directive_assimilation":
+          if (action.type === "process_human_inputs") delta -= 2;
+          if (
+            action.type === "research_threads" ||
+            action.type === "research_note"
+          )
+            delta -= 1;
+          break;
+        case "funnel_expansion":
+          if (action.type === "generate_note") delta -= 2;
+          if (action.type === "generate_and_post") delta -= 1;
+          if (action.type === "research_note") delta -= 1;
+          break;
+        case "engagement_compounding":
+          if (action.type === "fetch_engagement") delta -= 2;
+          if (action.type === "reply_safe") delta -= 1;
+          if (action.type === "optimize_schedule") delta -= 1;
+          break;
+      }
+
+      switch (strategy.funnelStage) {
+        case "bootstrap":
+          if (
+            action.type === "generate_and_post" ||
+            action.type === "generate_note"
+          ) {
+            delta -= 1;
+          }
+          break;
+        case "conversion":
+          if (action.type === "generate_note") delta -= 1;
+          break;
+        case "optimization":
+          if (
+            action.type === "optimize_schedule" ||
+            action.type === "weekly_retro"
+          ) {
+            delta -= 1;
+          }
+          break;
+      }
+
+      if (delta === 0) {
+        return action;
+      }
+
+      return {
+        ...action,
+        priority: adjustPriority(action.priority, delta),
+        reason: `${action.reason} [strategy:${strategy.objective}/${strategy.funnelStage}]`,
+      };
+    })
+    .sort((left, right) => left.priority - right.priority);
+}
+
 export class ContentSchedulerServiceImpl implements ContentSchedulerService {
   private readonly maxPostsPerHour: number;
+  private readonly maxPostsPerDay: number;
 
-  constructor(maxPostsPerHour = readEnvInt("MAX_POSTS_PER_HOUR", 3)) {
+  constructor(
+    maxPostsPerHour = readEnvInt("MAX_POSTS_PER_HOUR", 3),
+    maxPostsPerDay = readEnvInt("MAX_POSTS_PER_DAY", 4),
+  ) {
     this.maxPostsPerHour = maxPostsPerHour;
+    this.maxPostsPerDay = maxPostsPerDay;
   }
 
   async decideActions(): Promise<ScheduledAction[]> {
@@ -190,6 +293,30 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
         priority: 4,
         reason: `${dueThreadSlots.length}件のThreads投稿スロットが到達`,
       });
+    } else {
+      // ブートストラップ: トピックはあるがドラフト・スロットがない場合は初回生成をトリガー
+      const activeTopics = db
+        .select()
+        .from(topics)
+        .where(eq(topics.status, "active"))
+        .limit(1)
+        .get();
+      if (activeTopics) {
+        const anyAuditedDraft = db
+          .select()
+          .from(threadPostDrafts)
+          .where(eq(threadPostDrafts.status, "audited"))
+          .limit(1)
+          .get();
+        if (!anyAuditedDraft) {
+          actions.push({
+            type: "generate_and_post",
+            priority: 4,
+            reason:
+              "ブートストラップ: トピックありauditedドラフトなし→生成再試行",
+          });
+        }
+      }
     }
 
     const dueNoteSlots = db
@@ -200,6 +327,16 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
           eq(contentSlots.channel, "note"),
           eq(contentSlots.status, "pending"),
           lte(contentSlots.scheduledAt, nowIso),
+        ),
+      )
+      .all();
+    const pendingNoteSlots = db
+      .select()
+      .from(contentSlots)
+      .where(
+        and(
+          eq(contentSlots.channel, "note"),
+          eq(contentSlots.status, "pending"),
         ),
       )
       .all();
@@ -224,10 +361,10 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       .orderBy(desc(notePostResults.publishedAt))
       .limit(1)
       .all();
+    const needsNoteBootstrap =
+      recentNoteResults.length === 0 && pendingNoteSlots.length === 0;
     const shouldGenerateNote =
-      dueNoteSlots.length > 0 ||
-      (recentNoteResults.length === 0 && jstHour === 21) ||
-      noteJobAge >= 24;
+      dueNoteSlots.length > 0 || needsNoteBootstrap || noteJobAge >= 24;
     if (shouldGenerateNote) {
       actions.push({
         type: "generate_note",
@@ -235,9 +372,11 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
         reason:
           dueNoteSlots.length > 0
             ? `${dueNoteSlots.length}件のnoteスロットが到達`
-            : noteJobAge >= 24
-              ? `前回noteパイプラインから${Math.floor(noteJobAge)}時間経過`
-              : "noteの日次公開タイミング",
+            : needsNoteBootstrap
+              ? "ブートストラップ: note公開実績もslotもないため生成を再開"
+              : noteJobAge >= 24
+                ? `前回noteパイプラインから${Math.floor(noteJobAge)}時間経過`
+                : "noteの日次公開タイミング",
       });
     }
 
@@ -339,8 +478,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       }
     }
 
-    actions.sort((left, right) => left.priority - right.priority);
-    return actions;
+    return applyStrategyBias(actions);
   }
 
   async syncThreadSlotsFromAuditedDrafts(
@@ -352,6 +490,36 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
 
     const baseTime = new Date();
     const now = baseTime.toISOString();
+
+    // 日次上限チェック: 今日すでにスケジュール済みのスロット数を確認
+    const jstParts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: JST_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(baseTime);
+    const todayJst = `${jstParts.find((p) => p.type === "year")?.value}-${jstParts.find((p) => p.type === "month")?.value}-${jstParts.find((p) => p.type === "day")?.value}`;
+    const todayStartUtc = new Date(`${todayJst}T00:00:00+09:00`).toISOString();
+    const todayEndUtc = new Date(`${todayJst}T23:59:59+09:00`).toISOString();
+
+    const todaySlots = db
+      .select()
+      .from(contentSlots)
+      .where(
+        and(
+          eq(contentSlots.channel, "threads"),
+          gte(contentSlots.scheduledAt, todayStartUtc),
+          lte(contentSlots.scheduledAt, todayEndUtc),
+        ),
+      )
+      .all()
+      .filter((s) => s.status !== "skipped");
+
+    const remainingToday = this.maxPostsPerDay - todaySlots.length;
+    if (remainingToday <= 0) {
+      return 0;
+    }
+    maxSlots = Math.min(maxSlots, remainingToday);
     const topicPriority = new Map(
       db
         .select()

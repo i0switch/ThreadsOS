@@ -33,7 +33,7 @@ export type ThreadPostDraft = z.infer<typeof threadPostDraftSchema>;
 export const threadPostAuditSchema = z.object({
   id: z.string(),
   draftId: z.string(),
-  verdict: z.enum(["pass", "revise", "reject"]),
+  verdict: z.enum(["pass", "revise", "reject", "human_review"]),
   severity: z.enum(["low", "medium", "high"]),
   reasons: z.array(z.string()),
   suggestions: z.array(z.string()),

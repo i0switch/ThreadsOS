@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { desc, eq } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
-import { JinaSearchClient, type WebSearchClient } from "../../adapters/web-search/index.js";
+import {
+  JinaSearchClient,
+  type WebSearchClient,
+} from "../../adapters/web-search/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import { competitorSnapshots, researchItems } from "../../db/schema.js";
 import type { ResearchItem } from "../../domain/threads/index.js";
+import { parseJsonArray } from "../../utils/llm-json.js";
 import { ProfileContextServiceImpl } from "../profile-context/index.js";
 
 export interface ResearchService {
@@ -38,23 +42,32 @@ export class ResearchServiceImpl implements ResearchService {
     llm: LlmClient,
   ): Promise<ResearchItem[]> {
     const profileText = this.profileService.formatForPrompt();
-    const profileSection = profileText ? `\n## 運用者プロフィール\n${profileText}\n(このジャンル・トーンに特化したリサーチを行ってください。)` : "";
+    const profileSection = profileText
+      ? `\n## 運用者プロフィール\n${profileText}\n(このジャンル・トーンに特化したリサーチを行ってください。)`
+      : "";
 
     const query = `${topicName} Threads 投稿 コツ`;
     let webResultsStr = "";
     const sourceUrls: string[] = [];
 
     try {
-      const searchResults = await this.webSearchClient.search(query, { count: 3 });
+      const searchResults = await this.webSearchClient.search(query, {
+        count: 3,
+      });
       if (searchResults.length > 0) {
         webResultsStr = `\n## Web検索結果\n${searchResults.map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n内容: ${r.snippet}`).join("\n\n")}\n`;
-        sourceUrls.push(...searchResults.map(r => r.url));
+        sourceUrls.push(...searchResults.map((r) => r.url));
       }
     } catch (e) {
-      logger.warn({ error: e }, "Web search failed in researchTopic, falling back to LLM only");
+      logger.warn(
+        { error: e },
+        "Web search failed in researchTopic, falling back to LLM only",
+      );
     }
 
-    const searchInstruction = webResultsStr ? "以下のWeb検索結果と既存知識を組み合わせてリサーチを行ってください。" : "既存知識を活用してリサーチを行ってください。";
+    const searchInstruction = webResultsStr
+      ? "以下のWeb検索結果と既存知識を組み合わせてリサーチを行ってください。"
+      : "既存知識を活用してリサーチを行ってください。";
 
     const prompt = `以下のトピックについて、Threads投稿とnote記事に使えるリサーチを行ってください。
 ${searchInstruction}
@@ -82,12 +95,15 @@ ${topicName}
       evidenceType: string;
       confidence: string;
     }>;
-    try {
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-    } catch {
+    parsed =
+      parseJsonArray<{
+        source: string;
+        content: string;
+        evidenceType: string;
+        confidence: string;
+      }>(raw) ?? [];
+    if (parsed.length === 0) {
       logger.warn("Failed to parse research results");
-      parsed = [];
     }
 
     const items: ResearchItem[] = [];
@@ -95,10 +111,14 @@ ${topicName}
 
     for (const p of parsed) {
       let finalSource = p.source;
-      if (sourceUrls.length > 0 && p.source.includes("Web") && !p.source.includes("http")) {
+      if (
+        sourceUrls.length > 0 &&
+        p.source.includes("Web") &&
+        !p.source.includes("http")
+      ) {
         finalSource = `Web検索 (${sourceUrls[0]})`;
       }
-      
+
       const id = randomUUID();
       db.insert(researchItems)
         .values({

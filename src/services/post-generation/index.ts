@@ -5,6 +5,7 @@ import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import { threadPostDrafts } from "../../db/schema.js";
 import type { ThreadPostDraft } from "../../domain/threads/index.js";
+import { parseJsonArray, parseJsonObject } from "../../utils/llm-json.js";
 import { ProfileContextServiceImpl } from "../profile-context/index.js";
 
 export interface PostGenerationService {
@@ -36,8 +37,12 @@ export class PostGenerationServiceImpl implements PostGenerationService {
     improvementInsights?: string,
   ): Promise<ThreadPostDraft[]> {
     const profileText = this.profileService.formatForPrompt();
-    const profileSection = profileText ? `\n## 運用者プロフィール\n${profileText}\n` : "";
-    const insightsSection = improvementInsights ? `\n## 過去の分析から得た改善指示\n${improvementInsights}\n` : "";
+    const profileSection = profileText
+      ? `\n## 運用者プロフィール\n${profileText}\n`
+      : "";
+    const insightsSection = improvementInsights
+      ? `\n## 過去の分析から得た改善指示\n${improvementInsights}\n`
+      : "";
 
     const prompt = `あなたはThreads投稿のドラフトを作成するコピーライターです。
 ${profileSection}
@@ -67,29 +72,37 @@ ${insightsSection}
 
     const raw = await llm.generate(prompt, {
       temperature: 0.8,
+      systemPrompt:
+        "Return ONLY a valid JSON array as requested. No explanation, no preamble, no markdown code blocks.",
     });
 
-    let parsed: Array<{
-      body: string;
-      hookType: string;
-      ctaType: string;
-      noteTransition: string;
-    }>;
-    try {
-      const jsonMatch = raw.match(/\[[\s\S]*\]/);
-      parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : [];
-    } catch {
-      logger.warn("Failed to parse generated drafts");
-      parsed = [];
+    const parsed =
+      parseJsonArray<{
+        body: string;
+        hookType: string;
+        ctaType: string;
+        noteTransition: string;
+      }>(raw) ?? [];
+
+    if (parsed.length === 0) {
+      logger.warn(
+        { rawPreview: raw.slice(0, 200) },
+        "Failed to parse generated drafts",
+      );
     }
 
     const drafts: ThreadPostDraft[] = [];
     const now = new Date().toISOString();
 
-    for (const p of parsed) {
-      if (p.body.length > 500) {
+    for (const item of parsed) {
+      if (!item.body) {
+        logger.warn("Draft missing body field – skipping");
+        continue;
+      }
+
+      if (item.body.length > 500) {
         logger.warn(
-          { bodyLength: p.body.length },
+          { bodyLength: item.body.length },
           "Draft exceeds 500 chars – marking as rejected",
         );
         const id = randomUUID();
@@ -97,10 +110,10 @@ ${insightsSection}
           .values({
             id,
             topicId,
-            body: p.body,
-            hookType: p.hookType,
-            ctaType: p.ctaType,
-            noteTransition: p.noteTransition,
+            body: item.body,
+            hookType: item.hookType,
+            ctaType: item.ctaType,
+            noteTransition: item.noteTransition,
             status: "rejected",
             createdAt: now,
             updatedAt: now,
@@ -114,10 +127,10 @@ ${insightsSection}
         .values({
           id,
           topicId,
-          body: p.body,
-          hookType: p.hookType,
-          ctaType: p.ctaType,
-          noteTransition: p.noteTransition,
+          body: item.body,
+          hookType: item.hookType,
+          ctaType: item.ctaType,
+          noteTransition: item.noteTransition,
           status: "draft",
           createdAt: now,
           updatedAt: now,
@@ -127,10 +140,10 @@ ${insightsSection}
       drafts.push({
         id,
         topicId,
-        body: p.body,
-        hookType: p.hookType,
-        ctaType: p.ctaType,
-        noteTransition: p.noteTransition,
+        body: item.body,
+        hookType: item.hookType,
+        ctaType: item.ctaType,
+        noteTransition: item.noteTransition,
         status: "draft",
       });
     }
@@ -166,7 +179,9 @@ ${insightsSection}
     if (!existing) throw new Error(`Draft not found: ${draftId}`);
 
     const profileText = this.profileService.formatForPrompt();
-    const profileSection = profileText ? `\n## 運用者プロフィール\n${profileText}\n` : "";
+    const profileSection = profileText
+      ? `\n## 運用者プロフィール\n${profileText}\n`
+      : "";
 
     const prompt = `以下の投稿を改善してください。
 ${profileSection}
@@ -185,15 +200,17 @@ ${feedback}
 }`;
 
     const raw = await llm.generate(prompt, { temperature: 0.7 });
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    const parsed = jsonMatch
-      ? JSON.parse(jsonMatch[0])
-      : {
-          body: existing.body,
-          hookType: existing.hookType,
-          ctaType: existing.ctaType,
-          noteTransition: existing.noteTransition,
-        };
+    const parsed = parseJsonObject<{
+      body: string;
+      hookType: string;
+      ctaType: string;
+      noteTransition?: string;
+    }>(raw) ?? {
+      body: existing.body,
+      hookType: existing.hookType,
+      ctaType: existing.ctaType,
+      noteTransition: existing.noteTransition,
+    };
 
     const now = new Date().toISOString();
     const newId = randomUUID();

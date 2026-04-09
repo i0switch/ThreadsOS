@@ -12,6 +12,7 @@ import {
   notePostResults,
   threadPostResults,
 } from "../../db/schema.js";
+import { parseJsonArray as parseLlmJsonArray } from "../../utils/llm-json.js";
 
 export interface NoteEngagementInsight {
   insight: string;
@@ -21,7 +22,6 @@ export interface NoteEngagementInsight {
 
 export interface NoteEngagementAnalysisService {
   fetchAndStoreNoteResults(noteApi: NoteApiClient): Promise<number>;
-  analyzeNotePerformance(llm: LlmClient): Promise<NoteEngagementInsight[]>;
   generateNoteImprovements(llm: LlmClient): Promise<string>;
   connectToThreadsInsights(llm: LlmClient): Promise<string>;
 }
@@ -75,11 +75,11 @@ function safeDate(value?: string): Date | null {
 }
 
 function parseJsonArray(raw: string): NoteEngagementInsight[] {
-  const match = raw.match(/\[[\s\S]*\]/);
-  if (!match) {
+  const parsed = parseLlmJsonArray<Partial<NoteEngagementInsight>>(raw);
+  if (!parsed) {
     return [];
   }
-  const parsed = JSON.parse(match[0]) as Array<Partial<NoteEngagementInsight>>;
+
   return parsed
     .map((item) => ({
       insight: normalizeText(String(item.insight ?? "")),

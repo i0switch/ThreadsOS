@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq, gte, desc } from "drizzle-orm";
+import { desc, eq, gte } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import {
   DryRunNoteResearchClient,
@@ -13,14 +13,34 @@ import {
   humanInputs,
   improvementInsights,
   researchItems,
+  threadPostDrafts,
   threadPostResults,
   topics,
 } from "../../db/schema.js";
+import type { NoteAudit, NoteDraft } from "../../domain/note/index.js";
+import type {
+  ThreadPostAudit,
+  ThreadPostDraft,
+} from "../../domain/threads/index.js";
 import { EngagementAnalysisServiceImpl } from "../engagement-analysis/index.js";
+import { NoteAuditServiceImpl } from "../note-audit/index.js";
+import { NoteGenerationServiceImpl } from "../note-generation/index.js";
 import { PostAuditServiceImpl } from "../post-audit/index.js";
 import { PostGenerationServiceImpl } from "../post-generation/index.js";
 import { ResearchServiceImpl } from "../research/index.js";
 import { TopicSelectionServiceImpl } from "../topic-selection/index.js";
+
+const MAX_THREAD_REVISION_ATTEMPTS = 3;
+const MAX_NOTE_REVISION_ATTEMPTS = 3;
+
+type NotePipelineTopic = {
+  id: string;
+  name: string;
+  niche: string;
+  priorityScore: number;
+  status: string;
+  performanceScore: number;
+};
 
 export interface OrchestrationService {
   runDailyTopicResearch(
@@ -61,7 +81,183 @@ export class OrchestrationServiceImpl implements OrchestrationService {
   private researchService = new ResearchServiceImpl();
   private postGenService = new PostGenerationServiceImpl();
   private postAuditService = new PostAuditServiceImpl();
+  private noteGenService = new NoteGenerationServiceImpl();
+  private noteAuditService = new NoteAuditServiceImpl();
   private engagementService = new EngagementAnalysisServiceImpl();
+
+  private buildThreadRevisionFeedback(audit: ThreadPostAudit): string {
+    return [...audit.suggestions, ...audit.reasons]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  private buildNoteRevisionFeedback(audit: NoteAudit): string {
+    return [
+      audit.weakestSection ? `弱い箇所: ${audit.weakestSection}` : "",
+      audit.rewriteGuidance ?? "",
+    ]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  private async settleThreadDraft(
+    draft: ThreadPostDraft,
+    llm: LlmClient,
+  ): Promise<{ draft: ThreadPostDraft; audit: ThreadPostAudit }> {
+    let currentDraft = draft;
+    let audit = await this.postAuditService.auditDraft(currentDraft.id, llm);
+
+    for (
+      let attempt = 0;
+      attempt < MAX_THREAD_REVISION_ATTEMPTS && audit.verdict === "revise";
+      attempt += 1
+    ) {
+      const feedback = this.buildThreadRevisionFeedback(audit);
+      if (!feedback) {
+        break;
+      }
+
+      currentDraft = await this.postGenService.regenerateDraft(
+        currentDraft.id,
+        feedback,
+        llm,
+      );
+      audit = await this.postAuditService.auditDraft(currentDraft.id, llm);
+    }
+
+    return { draft: currentDraft, audit };
+  }
+
+  private async settleNoteDraft(
+    draft: NoteDraft,
+    llm: LlmClient,
+  ): Promise<{ draft: NoteDraft; audit: NoteAudit }> {
+    let currentDraft = draft;
+    let audit = await this.noteAuditService.auditDraft(currentDraft.id, llm);
+
+    for (
+      let attempt = 0;
+      attempt < MAX_NOTE_REVISION_ATTEMPTS && audit.verdict === "revise";
+      attempt += 1
+    ) {
+      const feedback = this.buildNoteRevisionFeedback(audit);
+      if (!feedback) {
+        break;
+      }
+
+      currentDraft = await this.noteGenService.regenerateDraft(
+        currentDraft.id,
+        feedback,
+        llm,
+      );
+      audit = await this.noteAuditService.auditDraft(currentDraft.id, llm);
+    }
+
+    return { draft: currentDraft, audit };
+  }
+
+  private async selectNotePipelineTopics(
+    limit: number,
+  ): Promise<NotePipelineTopic[]> {
+    const activeTopics = db
+      .select()
+      .from(topics)
+      .where(eq(topics.status, "active"))
+      .all();
+    const activeTopicMap = new Map(
+      activeTopics.map((topic) => [topic.id, topic]),
+    );
+
+    const draftTopicMap = new Map(
+      db
+        .select()
+        .from(threadPostDrafts)
+        .all()
+        .map((draft) => [draft.id, draft.topicId]),
+    );
+    const recentSince = new Date(
+      Date.now() - 14 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    const topicScores = new Map<
+      string,
+      { totalRate: number; totalImpressions: number; count: number }
+    >();
+
+    const recentResults = db
+      .select()
+      .from(threadPostResults)
+      .where(gte(threadPostResults.publishedAt, recentSince))
+      .all();
+
+    for (const result of recentResults) {
+      const topicId = draftTopicMap.get(result.draftId);
+      if (!topicId || !activeTopicMap.has(topicId)) {
+        continue;
+      }
+
+      const current = topicScores.get(topicId) ?? {
+        totalRate: 0,
+        totalImpressions: 0,
+        count: 0,
+      };
+      current.totalRate +=
+        (result.likes + result.repliesCount + result.shares) /
+        Math.max(result.impressions, 1);
+      current.totalImpressions += result.impressions;
+      current.count += 1;
+      topicScores.set(topicId, current);
+    }
+
+    const ranked: NotePipelineTopic[] = [...topicScores.entries()]
+      .map(([topicId, score]) => {
+        const topic = activeTopicMap.get(topicId);
+        if (!topic) {
+          return null;
+        }
+
+        return {
+          id: topic.id,
+          name: topic.name,
+          niche: topic.niche,
+          priorityScore: topic.priorityScore,
+          status: topic.status,
+          performanceScore:
+            score.totalRate / Math.max(score.count, 1) +
+            Math.min(score.totalImpressions / 10_000, 0.2),
+        };
+      })
+      .filter((topic): topic is NotePipelineTopic => Boolean(topic))
+      .sort((left, right) => {
+        if (right.performanceScore !== left.performanceScore) {
+          return right.performanceScore - left.performanceScore;
+        }
+        return right.priorityScore - left.priorityScore;
+      })
+      .slice(0, limit);
+
+    if (ranked.length >= limit) {
+      return ranked;
+    }
+
+    const fallback = await this.topicService.selectDailyTopics(limit * 2);
+    const selected = [...ranked];
+    for (const topic of fallback) {
+      if (selected.some((item) => item.id === topic.id)) {
+        continue;
+      }
+      selected.push({
+        ...topic,
+        performanceScore: 0,
+      });
+      if (selected.length >= limit) {
+        break;
+      }
+    }
+
+    return selected;
+  }
 
   async processHumanInputs(
     _llm: LlmClient,
@@ -222,7 +418,11 @@ export class OrchestrationServiceImpl implements OrchestrationService {
   }
 
   private getImprovementInsightsSummary(): string {
-    const priorityOrder: Record<string, number> = { high: 3, medium: 2, low: 1 };
+    const priorityOrder: Record<string, number> = {
+      high: 3,
+      medium: 2,
+      low: 1,
+    };
 
     const retroInsights = db
       .select()
@@ -231,7 +431,10 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       .orderBy(desc(improvementInsights.createdAt))
       .limit(10)
       .all()
-      .sort((a, b) => (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0))
+      .sort(
+        (a, b) =>
+          (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0),
+      )
       .slice(0, 3);
 
     const postInsights = db
@@ -241,7 +444,10 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       .orderBy(desc(improvementInsights.createdAt))
       .limit(10)
       .all()
-      .sort((a, b) => (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0))
+      .sort(
+        (a, b) =>
+          (priorityOrder[b.priority] ?? 0) - (priorityOrder[a.priority] ?? 0),
+      )
       .slice(0, 3);
 
     const allInsights = [...retroInsights, ...postInsights];
@@ -291,12 +497,12 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       totalDrafts += drafts.length;
 
       for (const draft of drafts) {
-        const audit = await this.postAuditService.auditDraft(draft.id, llm);
-        if (audit.verdict === "pass") passedDrafts++;
+        const settled = await this.settleThreadDraft(draft, llm);
+        if (settled.audit.verdict === "pass") passedDrafts++;
 
         await storage.saveFile(
-          `data/threads/drafts/${date}/${draft.id}.md`,
-          `# Draft: ${draft.hookType}\n\n${draft.body}\n\n---\nAudit: ${audit.verdict} (${audit.severity})`,
+          `data/threads/drafts/${date}/${settled.draft.id}.md`,
+          `# Draft: ${settled.draft.hookType}\n\n${settled.draft.body}\n\n---\nAudit: ${settled.audit.verdict} (${settled.audit.severity})`,
         );
       }
     }
@@ -327,6 +533,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     }
 
     for (const postResult of recentPosts) {
+      await this.engagementService.refreshPostMetrics(postResult.id, api);
       await this.engagementService.fetchAndClassifyReplies(
         postResult.id,
         api,
@@ -348,36 +555,31 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     if (dryRun)
       return "[DRY-RUN] Would generate note drafts from winning themes.";
 
-    const { NoteGenerationServiceImpl } = await import(
-      "../note-generation/index.js"
-    );
-    const { NoteAuditServiceImpl } = await import("../note-audit/index.js");
-
-    const noteGenService = new NoteGenerationServiceImpl();
-    const noteAuditService = new NoteAuditServiceImpl();
-
-    const topics = await this.topicService.selectDailyTopics(3);
+    const topics = await this.selectNotePipelineTopics(3);
     if (topics.length === 0) return "No topics available for note pipeline.";
 
     const date = new Date().toISOString().split("T")[0];
     let notesGenerated = 0;
 
     for (const topic of topics) {
-      const idea = await noteGenService.createIdea(
+      const idea = await this.noteGenService.createIdea(
         topic.name,
         `${topic.niche}に関心のある読者`,
         topic.id,
       );
 
-      const titles = await noteGenService.generateTitleCandidates(idea.id, llm);
+      const titles = await this.noteGenService.generateTitleCandidates(
+        idea.id,
+        llm,
+      );
       if (titles.length === 0) continue;
 
-      const outline = await noteGenService.generateOutline(
+      const outline = await this.noteGenService.generateOutline(
         idea.id,
         titles[0],
         llm,
       );
-      const draft = await noteGenService.generateDraft(
+      const draft = await this.noteGenService.generateDraft(
         idea.id,
         titles[0],
         outline,
@@ -385,12 +587,14 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       );
       notesGenerated++;
 
-      const audit = await noteAuditService.auditDraft(draft.id, llm);
-      const checklist = await noteGenService.generateChecklist(draft.id);
+      const settled = await this.settleNoteDraft(draft, llm);
+      const checklist = await this.noteGenService.generateChecklist(
+        settled.draft.id,
+      );
 
       await storage.saveFile(
-        `data/note/drafts/${date}/${draft.id}.md`,
-        `# ${draft.title}\n\n${draft.body}\n\n---\nAudit: ${audit.verdict} (Score: ${audit.score}/10)\n\n${checklist}`,
+        `data/note/drafts/${date}/${settled.draft.id}.md`,
+        `# ${settled.draft.title}\n\n${settled.draft.body}\n\n---\nAudit: ${settled.audit.verdict} (Score: ${settled.audit.score}/10)\n\n${checklist}`,
       );
     }
 
