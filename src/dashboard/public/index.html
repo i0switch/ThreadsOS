@@ -461,10 +461,10 @@
     function renderAgents(list){
       if(!list.length)return'<p class="text-slate-400">エージェントがまだ登録されていません。</p>';
       const byStatus={};list.forEach(ae=>{const s=ae.status??"idle";byStatus[s]=(byStatus[s]??0)+1});
-      const collapsed=list.length>8;
+      const collapsed=list.length>5;
       return`
         <div class="flex flex-wrap gap-2 mb-4">
-          <span class="chip chip-neutral">全 ${list.length} 名</span>
+          <span class="chip chip-neutral">全 ${list.length} エージェント</span>
           ${Object.entries(byStatus).map(([s,c])=>`<span class="${st(s)}">${escapeHtml(tStatus(s))}: ${c}</span>`).join("")}
         </div>
         <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-2 pr-3">名前</th><th class="pb-2 pr-3">所属</th><th class="pb-2 pr-3">役割</th><th class="pb-2 pr-3">状態</th><th class="pb-2 pr-3">最終稼働</th><th class="pb-2"></th></tr></thead><tbody class="collapsible-list${collapsed?"":" expanded"}" id="agents-list">
