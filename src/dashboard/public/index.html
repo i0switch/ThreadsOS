@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ThreadsOS Dashboard</title>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --bg-soft: #edf2f8;
+      --panel: rgba(255, 255, 255, 0.88);
+      --panel-strong: rgba(255, 255, 255, 0.94);
+      --line: rgba(146, 165, 189, 0.2);
+      --line-strong: rgba(108, 132, 165, 0.24);
+      --ink: #12243b;
+      --muted: #6d8096;
+      --accent: #0ea5e9;
+      --accent-2: #f97316;
+      --accent-3: #10b981;
+      --danger: #dc2626;
+      --warning: #b7791f;
+      --success: #047857;
+      --shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
+    }
+    html {
+      font-family: "IBM Plex Sans JP", "Hiragino Sans", sans-serif;
+      background: var(--bg);
+      color-scheme: light;
+    }
+    body {
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(14, 165, 233, 0.08), transparent 24%),
+        radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.08), transparent 20%),
+        linear-gradient(180deg, #f8fafc 0%, #f4f7fb 46%, #eef3f8 100%);
+    }
+    a { color: inherit; text-decoration: none; }
+    .grid-overlay {
+      background-image: linear-gradient(rgba(148,163,184,.12) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.12) 1px, transparent 1px);
+      background-size: 56px 56px;
+      opacity: .35;
+      z-index: 0;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.22), transparent 92%);
+    }
+    .app-shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      min-height: 100vh;
+      position: relative;
+    }
+    .workspace-sidebar {
+      position: sticky;
+      top: 0;
+      align-self: start;
+      height: 100vh;
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      border-right: 1px solid var(--line);
+      background: rgba(248, 250, 252, 0.82);
+      backdrop-filter: blur(18px);
+      z-index: 5;
+    }
+    .brand-card, .sidebar-card { background: rgba(255, 255, 255, 0.78); border: 1px solid var(--line); border-radius: 1.35rem; box-shadow: var(--shadow); }
+    .brand-card { display: flex; align-items: center; gap: .9rem; padding: 1rem; }
+    .brand-mark { height: 2.75rem; width: 2.75rem; border-radius: 1rem; display: grid; place-items: center; background: linear-gradient(135deg, rgba(14,165,233,.14), rgba(249,115,22,.12)); color: #0f3b60; font-weight: 800; font-family: "Space Grotesk", sans-serif; border: 1px solid rgba(14,165,233,.14); }
+    .brand-eyebrow { text-transform: uppercase; letter-spacing: .18em; color: #6f8199; font-size: .67rem; font-weight: 700; }
+    .brand-title { margin-top: .3rem; font-family: "Space Grotesk", sans-serif; font-size: 1.2rem; line-height: 1.05; font-weight: 700; color: #10253d; }
+    .sidebar-card { padding: 1rem; }
+    .sidebar-nav { display: flex; flex-direction: column; gap: .5rem; }
+    .sidebar-link {
+      display: block; padding: .85rem 1rem; border-radius: 1rem; border: 1px solid rgba(201,219,242,.7); background: rgba(255,255,255,.92);
+      transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease; box-shadow: 0 8px 24px rgba(15,23,42,.04); cursor: pointer;
+    }
+    .sidebar-link:hover { transform: translateY(-1px); border-color: rgba(14,165,233,.24); box-shadow: 0 10px 28px rgba(14,165,233,.08); }
+    .sidebar-link.active { background: rgba(14,165,233,.1); border-color: rgba(14,165,233,.32); box-shadow: 0 10px 28px rgba(14,165,233,.12); }
+    .sidebar-link strong { display: block; font-size: .9rem; color: #12314f; font-weight: 700; }
+    .sidebar-link span { display: block; margin-top: .2rem; font-size: .76rem; line-height: 1.5; color: #6f8199; }
+    .workspace-main { min-width: 0; position: relative; }
+    .topbar {
+      position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+      padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); background: rgba(244, 247, 251, 0.86); backdrop-filter: blur(18px);
+    }
+    .topbar-kicker { text-transform: uppercase; letter-spacing: .18em; color: #6f8199; font-size: .67rem; font-weight: 700; }
+    .topbar-title { margin-top: .3rem; font-family: "Space Grotesk", sans-serif; font-size: 1.35rem; line-height: 1.05; font-weight: 700; color: #10253d; }
+    .workspace-content { max-width: 1440px; margin: 0 auto; padding: 1.5rem; position: relative; z-index: 1; }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: flex; flex-direction: column; gap: 1.5rem; }
+    .panel, .panel-strong { border-radius: 1.75rem; border: 1px solid var(--line); box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.82); backdrop-filter: blur(16px); animation: rise .45s ease both; }
+    .panel { background: var(--panel); }
+    .panel-strong { background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.94)); border-color: rgba(14, 165, 233, 0.16); position: relative; overflow: hidden; }
+    .panel-strong::after { content: ""; position: absolute; inset: 0 auto auto 0; width: 100%; height: 4px; background: linear-gradient(90deg, rgba(14,165,233,.72), rgba(16,185,129,.5), rgba(249,115,22,.56)); pointer-events: none; }
+    .dashboard-cluster { display: flex; flex-direction: column; gap: 1rem; }
+    .cluster-header { display: flex; align-items: center; gap: .9rem; color: #5d728d; text-transform: uppercase; letter-spacing: .18em; font-size: .74rem; font-weight: 700; }
+    .cluster-header::before { content: ""; width: 2.1rem; height: 2px; border-radius: 999px; background: linear-gradient(90deg, var(--accent-2), var(--accent)); box-shadow: 0 0 18px rgba(14,165,233,.2); }
+    .section-title { letter-spacing: .16em; text-transform: uppercase; color: #7b8ea4; font-size: .68rem; font-weight: 700; }
+    .section-name { margin-top: .65rem; font-family: "Space Grotesk", sans-serif; font-size: clamp(1.15rem, 2vw, 1.55rem); line-height: 1.05; letter-spacing: -.04em; color: #10253d; font-weight: 700; }
+    .section-subtitle { color: var(--muted); font-size: .88rem; margin-top: .45rem; line-height: 1.65; }
+    .metric-card { background: linear-gradient(180deg, #ffffff, #f9fbfe); border: 1px solid #dbe6f2; border-radius: 1.25rem; padding: 1rem; min-height: 7rem; box-shadow: inset 0 1px 0 rgba(255,255,255,.92); }
+    .metric-label { text-transform: uppercase; letter-spacing: .14em; font-size: .66rem; color: #8093aa; font-weight: 700; }
+    .metric-value { margin-top: .55rem; font-size: 1.55rem; font-weight: 700; color: #10253d; line-height: 1.05; font-family: "Space Grotesk", sans-serif; }
+    .metric-sub { margin-top: .55rem; color: #677b92; font-size: .82rem; line-height: 1.6; }
+    .mini-stat { background: linear-gradient(180deg, #ffffff, #f8fbff); border: 1px solid #dce6f1; border-radius: 1.25rem; padding: 1rem; }
+    .mini-stat-label { text-transform: uppercase; letter-spacing: .14em; font-size: .65rem; color: #8093aa; font-weight: 700; }
+    .mini-stat-title { margin-top: .75rem; font-size: 1rem; line-height: 1.35; color: #10253d; font-weight: 700; }
+    .mini-stat-copy { margin-top: .55rem; color: #677b92; font-size: .82rem; line-height: 1.65; }
+    .chip { display: inline-flex; align-items: center; gap: .35rem; padding: .38rem .7rem; border-radius: 999px; font-size: .71rem; font-weight: 700; border: 1px solid transparent; white-space: nowrap; }
+    .chip-neutral { background: rgba(148,163,184,.14); color: #45607f; border-color: rgba(148,163,184,.18); }
+    .chip-good { background: rgba(16,185,129,.1); color: var(--success); border-color: rgba(34,197,94,.18); }
+    .chip-warn { background: rgba(245,158,11,.1); color: var(--warning); border-color: rgba(245,158,11,.18); }
+    .chip-bad { background: rgba(248,113,113,.1); color: var(--danger); border-color: rgba(248,113,113,.18); }
+    .chip-info { background: rgba(56,189,248,.1); color: #075985; border-color: rgba(56,189,248,.18); }
+    .content-row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+    .soft-divider { border-top: 1px solid rgba(148,163,184,.12); }
+    .stack-list { display: flex; flex-direction: column; gap: .85rem; }
+    .stack-card { background: #ffffff; border: 1px solid #dbe5f1; border-radius: 1.15rem; padding: 1rem 1.05rem; box-shadow: 0 10px 24px rgba(15,23,42,.04); }
+    .stack-card-main { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1.3fr) minmax(200px, .7fr) auto; align-items: start; }
+    .stack-card-title { font-size: .98rem; line-height: 1.35; font-weight: 700; color: #10253d; }
+    .stack-card-sub { margin-top: .28rem; font-size: .82rem; line-height: 1.6; color: #6f8199; }
+    .stack-card-meta { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: flex-end; }
+    .stack-card-stats { display: grid; gap: .75rem; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: .85rem; }
+    .stack-stat-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .14em; color: #8093aa; font-weight: 700; }
+    .stack-stat-value { margin-top: .35rem; font-size: .88rem; color: #10253d; font-weight: 600; }
+    .stack-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .ghost-button { cursor: pointer; transition: background-color 160ms ease, transform 80ms ease; }
+    .ghost-button:hover { transform: translateY(-1px); }
+    .ghost-button:active { transform: translateY(0); }
+    .progress-track { height: 6px; border-radius: 999px; background: rgba(148,163,184,.12); overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 999px; transition: width .5s ease; }
+    .progress-fill.good { background: linear-gradient(90deg, #10b981, #34d399); }
+    .progress-fill.warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .progress-fill.bad { background: linear-gradient(90deg, #ef4444, #f87171); }
+    .collapsible-list > :nth-child(n+6) { display: none; }
+    .collapsible-list.expanded > :nth-child(n+6) { display: flex; }
+    .json-formatted { font-size: .82rem; line-height: 1.7; }
+    .json-formatted dt { color: #6f8199; font-weight: 600; font-size: .75rem; }
+    .json-formatted dd { color: #10253d; margin-bottom: .35rem; }
+    .log-summary { max-width: 28rem; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    [class*="bg-slate-800/80"], [class*="bg-white/4"], [class*="bg-white/3"] { background: #f8fbff !important; }
+    [class*="border-white/8"], [class*="border-white/6"], [class*="border-slate-700"] { border-color: #dbe5f1 !important; }
+    [class*="text-white"] { color: #10253d !important; }
+    [class*="text-slate-200"], [class*="text-slate-300"] { color: #42566d !important; }
+    [class*="text-slate-400"], [class*="text-slate-500"] { color: #6f8199 !important; }
+    [class*="bg-cyan-500/15"], [class*="bg-cyan-500/24"], [class*="bg-cyan-500/22"] { background: rgba(14,165,233,.1) !important; border-color: rgba(14,165,233,.18) !important; color: #075985 !important; }
+    [class*="bg-emerald-500/15"], [class*="bg-emerald-500/22"] { background: rgba(16,185,129,.1) !important; border-color: rgba(16,185,129,.18) !important; color: #047857 !important; }
+    [class*="bg-rose-500/15"], [class*="bg-rose-500/22"] { background: rgba(239,68,68,.08) !important; border-color: rgba(239,68,68,.18) !important; color: #b91c1c !important; }
+    input[class*="bg-slate-950/70"], select[class*="bg-slate-950/70"], textarea[class*="bg-slate-950/70"] { background: #ffffff !important; color: #10253d !important; box-shadow: inset 0 1px 2px rgba(15,23,42,.03); }
+    input[class*="placeholder-slate-500"]::placeholder, textarea[class*="placeholder-slate-500"]::placeholder { color: #91a1b5 !important; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-block; }
+    .htmx-request.htmx-indicator { display: inline-block; }
+    @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @media (max-width: 1120px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .workspace-sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .sidebar-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topbar { padding-top: 1.1rem; }
+    }
+    @media (max-width: 720px) {
+      .sidebar-nav { grid-template-columns: 1fr; }
+      .topbar { flex-direction: column; align-items: flex-start; }
+      .workspace-content { padding: 1rem; }
+      .stack-card-main { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-900">
+  <div class="app-shell overflow-x-clip">
+    <div class="absolute inset-0 grid-overlay pointer-events-none"></div>
+    <aside class="workspace-sidebar">
+      <div class="brand-card">
+        <div class="brand-mark">T</div>
+        <div>
+          <div class="brand-eyebrow">ThreadsOS</div>
+          <div class="brand-title">Dashboard</div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <a href="#" data-tab="overview" class="sidebar-link active" onclick="switchTab('overview');return false">
+          <strong>概要</strong>
+          <span>システム状態・予算・KPI</span>
+        </a>
+        <a href="#" data-tab="approvals" class="sidebar-link" onclick="switchTab('approvals');return false">
+          <strong>承認管理</strong>
+          <span>提案・レビュー待ち</span>
+        </a>
+        <a href="#" data-tab="operations" class="sidebar-link" onclick="switchTab('operations');return false">
+          <strong>運用状況</strong>
+          <span>部署・エージェント・操作</span>
+        </a>
+        <a href="#" data-tab="telemetry" class="sidebar-link" onclick="switchTab('telemetry');return false">
+          <strong>テレメトリ</strong>
+          <span>KPI・実行ログ</span>
+        </a>
+      </nav>
+    </aside>
+
+    <div class="workspace-main">
+      <header class="topbar">
+        <div>
+          <div class="topbar-kicker">ThreadsOS</div>
+          <div class="topbar-title">自動運用ダッシュボード</div>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="chip chip-neutral">30秒更新</span>
+          <div class="panel rounded-2xl px-4 py-3 text-sm text-slate-300 flex items-center gap-3">
+            <span class="text-slate-500">最終更新</span><span id="last-updated" class="font-semibold text-white">-</span><span class="htmx-indicator ml-1 text-cyan-300">更新中...</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="workspace-content">
+
+        <!-- ===== 概要タブ ===== -->
+        <div class="tab-panel active" id="tab-overview">
+          <section class="dashboard-cluster">
+            <div class="cluster-header">概要</div>
+            <div class="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">
+              <section id="summary-section" class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/summary" hx-trigger="load, every 30s" hx-target="#summary-content" hx-swap="innerHTML" hx-indicator="#summary-indicator">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">システム概要</div><div class="section-name">司令塔サマリー</div><div class="section-subtitle">方針、アラート、成果、次回 heartbeat を最初に読むエリアです。</div></div><span id="summary-indicator" class="htmx-indicator text-xs text-cyan-300">読み込み中...</span></div>
+                <div id="summary-content"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+              <section id="budget-section" class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/summary" hx-trigger="load, every 45s" hx-target="#budget-content" hx-swap="innerHTML" hx-indicator="#budget-indicator">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">予算監視</div><div class="section-name">予算圧迫の監視</div><div class="section-subtitle">global と各部署の tokens / calls を横並びで確認します。</div></div><span id="budget-indicator" class="htmx-indicator text-xs text-cyan-300">読み込み中...</span></div>
+                <div id="budget-content"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+            </div>
+          </section>
+        </div>
+
+        <!-- ===== 承認管理タブ ===== -->
+        <div class="tab-panel" id="tab-approvals">
+          <section class="dashboard-cluster">
+            <div class="cluster-header">承認管理</div>
+            <div class="grid gap-6 xl:grid-cols-[1.08fr_.92fr]">
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">提案一覧</div><div class="section-name">承認待ちの提案</div><div class="section-subtitle">理由、根拠、期待効果まで含めて一気に確認します。</div></div></div>
+                <div id="proposals-content" hx-get="/api/dashboard/proposals" hx-trigger="load, every 30s" hx-target="#proposals-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+              <div class="space-y-6">
+                <section id="reviews-section" class="panel rounded-3xl p-5 sm:p-6">
+                  <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">レビュー</div><div class="section-name">自動処理できなかった項目</div><div class="section-subtitle">エラーやタイムアウトで自動処理が止まった項目です。一括で処理できます。</div></div></div>
+                  <div id="reviews-content" hx-get="/api/dashboard/reviews?status=pending" hx-trigger="load, every 30s" hx-target="#reviews-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
+                </section>
+                <section class="panel rounded-3xl p-5 sm:p-6">
+                  <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">詳細表示</div><div class="section-name">提案の詳細</div><div class="section-subtitle">選択した提案の履歴と承認段階を確認します。</div></div></div>
+                  <div id="proposal-detail-content" class="space-y-4"><p class="text-slate-400">提案カードの「詳細」を押すとここに展開します。</p></div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <!-- ===== 運用状況タブ ===== -->
+        <div class="tab-panel" id="tab-operations">
+          <section class="dashboard-cluster">
+            <div class="cluster-header">運用状況</div>
+            <div class="grid gap-6 xl:grid-cols-[1.05fr_.95fr]">
+              <section class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/departments" hx-trigger="load, every 30s" hx-target="#departments-content" hx-swap="innerHTML">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">部署一覧</div><div class="section-name">部署の現在地</div><div class="section-subtitle">どこが進んでいて、どこが止まっているかを一覧で見ます。</div></div></div>
+                <div id="departments-content"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">エージェント一覧</div><div class="section-name">担当者の状態</div><div class="section-subtitle">現在タスク、役割、予算消費をまとめて確認します。</div></div></div>
+                <div id="agents-content" hx-get="/api/dashboard/agents" hx-trigger="load, every 30s" hx-target="#agents-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+            </div>
+            <div class="grid gap-6 xl:grid-cols-2">
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">部署の詳細</div><div class="section-name">部署詳細</div><div class="section-subtitle">入力、出力、停滞、優先タスクをまとめて確認します。</div></div></div>
+                <div id="department-detail-content" class="space-y-4"><p class="text-slate-400">部署カードの「詳細」を押すとここに展開します。</p></div>
+              </section>
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">エージェントの詳細</div><div class="section-name">担当者詳細</div><div class="section-subtitle">現在タスク、保留提案、残予算を深掘りします。</div></div></div>
+                <div id="agent-detail-content" class="space-y-4"><p class="text-slate-400">担当者カードの「詳細」を押すとここに展開します。</p></div>
+              </section>
+            </div>
+            <section id="control-section" class="panel-strong rounded-3xl p-5 sm:p-6">
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between mb-4"><div><div class="section-title">操作パネル</div><div class="section-name">手動操作</div><div class="section-subtitle">停止、再開、ディレクティブ投入をここで行います。</div></div></div>
+              <div class="flex flex-wrap gap-3 mb-5">
+                <button type="button" hx-post="/api/dashboard/control/pause" hx-vals='{"scope":"global"}' hx-target="#control-result" hx-swap="innerHTML" class="ghost-button bg-rose-500/15 hover:bg-rose-500/22 text-rose-100 px-4 py-2.5 rounded-xl font-semibold border border-rose-400/20">全体停止</button>
+                <button type="button" hx-post="/api/dashboard/control/resume" hx-vals='{"scope":"global"}' hx-target="#control-result" hx-swap="innerHTML" class="ghost-button bg-emerald-500/15 hover:bg-emerald-500/22 text-emerald-100 px-4 py-2.5 rounded-xl font-semibold border border-emerald-400/20">全体再開</button>
+              </div>
+              <div id="control-result" class="text-sm text-slate-300 mb-5"></div>
+              <h3 class="text-sm font-semibold text-slate-200 mb-2">ディレクティブ追加</h3>
+              <form hx-post="/api/dashboard/control/directives" hx-target="#directive-result" hx-swap="innerHTML" class="space-y-3">
+                <div class="grid gap-3 md:grid-cols-2">
+                  <select name="target" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-400">
+                    <option value="global">全体</option>
+                    <option value="next_heartbeat">次回HB重点</option>
+                    <option value="assignee">担当者指示</option>
+                  </select>
+                  <select name="priority" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-400">
+                    <option value="low">低</option>
+                    <option value="medium" selected>中</option>
+                    <option value="high">高</option>
+                  </select>
+                </div>
+                <div class="grid gap-3 md:grid-cols-2">
+                  <input type="text" name="scope" value="global" placeholder="スコープ (例: global)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                  <input type="text" name="department" placeholder="部署名 (任意)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                </div>
+                <div class="grid gap-3 md:grid-cols-2">
+                  <input type="text" name="agentId" placeholder="エージェントID (担当者指示時)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                  <input type="text" name="content" placeholder="例: 次回HBでは提案の承認を最優先" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                </div>
+                <button type="submit" class="ghost-button bg-cyan-500/15 hover:bg-cyan-500/24 text-cyan-100 px-4 py-3 rounded-xl text-sm font-semibold border border-cyan-400/20">送信</button>
+              </form>
+              <div id="directive-result" class="text-sm text-slate-300 mt-3"></div>
+            </section>
+          </section>
+        </div>
+
+        <!-- ===== テレメトリタブ ===== -->
+        <div class="tab-panel" id="tab-telemetry">
+          <section class="dashboard-cluster">
+            <div class="cluster-header">テレメトリ</div>
+            <div class="grid gap-6 xl:grid-cols-[0.82fr_1.18fr]">
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">KPI スナップショット</div><div class="section-name">指標の観測面</div><div class="section-subtitle">channel / period / metric をまとめて追跡します。</div></div></div>
+                <div id="kpi-content" hx-get="/api/dashboard/kpi" hx-trigger="load, every 60s" hx-target="#kpi-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">実行ログ</div><div class="section-name">ジョブ履歴</div><div class="section-subtitle">ジョブの履歴と結果を時系列で追います。</div></div></div>
+                <div id="logs-content" hx-get="/api/dashboard/logs?page=1&perPage=20" hx-trigger="load, every 30s" hx-target="#logs-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
+            </div>
+          </section>
+        </div>
+
+      </main>
+    </div>
+  </div>
+  <script>
+    /* ── Helpers ────────────────────────────────────────── */
+    function escapeHtml(v){return String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;")}
+    function a(v){return Array.isArray(v)?v:v==null?[]:[v]}
+    function isDateLike(v){const d=new Date(v);return v&&!Number.isNaN(d.getTime())}
+    function fd(v,f="-"){return !v?f:isDateLike(v)?new Date(v).toLocaleString("ja-JP"):escapeHtml(v)}
+    function fds(v,f="-"){return !v?f:isDateLike(v)?new Date(v).toLocaleDateString("ja-JP"):escapeHtml(v)}
+    function fn(v,f="-"){if(v==null||v==="")return f;const n=Number(v);return Number.isNaN(n)?escapeHtml(v):n.toLocaleString("ja-JP")}
+    function fp(v){return Number.isFinite(v)?`${Math.round(v*100)}%`:"-"}
+    function st(v){const s=String(v??"").toLowerCase();if(["completed","approved","pass","published","healthy","active","ready","running"].includes(s))return "chip chip-good";if(["failed","rejected","reject","error","critical","paused","blocked"].includes(s))return "chip chip-bad";if(["pending","processing","queued","warn","warning","degraded","limited","idle"].includes(s))return "chip chip-warn";return "chip chip-neutral"}
+    function pr(v){const s=String(v??"").toLowerCase();return ["critical","high"].includes(s)?"chip chip-bad":s==="medium"?"chip chip-warn":"chip chip-neutral"}
+    function pct(u,l){const n=Number(u),d=Number(l);return Number.isFinite(n)&&Number.isFinite(d)&&d>0?Math.min(1,Math.max(0,n/d)):null}
+    function norm(d){const s=d?.systemSummary??d?.summary??d??{};return{s,proposals:a(d?.proposals??s?.proposals),agents:a(d?.agents??d?.agentStates??s?.agents??s?.agentStates??s?.agentHighlights),budgets:a(d?.budgets??d?.budgetTracking??s?.budgets??s?.budget??[]),alerts:a(s?.importantAlerts??s?.alerts??d?.alerts),decisions:a(s?.recentDecisions??d?.recentDecisions),nextHeartbeat:s?.nextHeartbeat??s?.nextHeartbeats?.[0]??null}}
+
+    function fmtJson(v){
+      if(v==null||v==="")return"-";
+      try{
+        const obj=typeof v==="string"?JSON.parse(v):v;
+        if(typeof obj!=="object"||obj===null)return escapeHtml(String(v));
+        return'<dl class="json-formatted">'+Object.entries(obj).map(([k,val])=>`<dt>${escapeHtml(tMetric(k))}</dt><dd>${escapeHtml(String(val))}</dd>`).join("")+"</dl>";
+      }catch{return escapeHtml(String(v))}
+    }
+
+    /* ── 翻訳レイヤー ──────────────────────────────────── */
+    const T={
+      phase:{generate_note:"記事生成",generate_and_post:"投稿生成・公開",fetch_engagement:"エンゲージメント取得",notify:"通知送信",research_note:"記事リサーチ",research_thread:"Threadsリサーチ",analyze:"分析",audit:"監査",publish:"公開",draft:"下書き作成"},
+      role:{leader:"リーダー",generator:"生成担当",analyst:"分析担当",optimizer:"最適化担当",reply_manager:"リプライ管理",reply_generator:"リプライ生成",competitor_research:"競合リサーチ",researcher:"リサーチ担当",scheduler:"スケジューラ",executive:"統括","role unset":"未設定"},
+      dept:{note:"note運用",threads:"Threads運用",community:"コミュニティ",optimization:"最適化",research:"リサーチ",command:"司令部",system:"システム"},
+      status:{completed:"完了",failed:"失敗",pending:"保留中",idle:"待機中",active:"稼働中",paused:"停止中",approved:"承認済",rejected:"却下",running:"実行中",ready:"準備完了",pass:"合格",published:"公開済",blocked:"ブロック中",processing:"処理中",queued:"キュー中",error:"エラー",healthy:"正常",degraded:"劣化",limited:"制限中",warn:"警告",warning:"警告",critical:"危険",normal:"正常",ok:"正常"},
+      job:{"hourly-heartbeat":"定期ハートビート","nightly-note-pipeline":"夜間note生成","daily-threads-plan":"日次Threads計画","daily-topic-research":"日次トピックリサーチ","weekly-retro":"週次振り返り","post-publish-followup":"投稿後フォロー","refresh-threads-token":"トークン更新"},
+      decision:{frequency:"投稿頻度",timing:"投稿タイミング","frequency adjustment":"投稿頻度の調整","timing adjustment":"タイミング調整"},
+      reason:{"Adjusted by cadence optimizer":"投稿ペースを自動最適化","No draft-bound pending slots to reschedule":"リスケ対象の下書き枠なし","Progress notification sent":"進捗通知を送信済み"},
+      period:{cta:"CTA型",hook:"フック型",theme:"テーマ別",weekday:"曜日別",hour:"時間帯別",derived:"算出指標",operations:"運用指標"},
+      periodKey:{share:"シェア誘導",save:"保存誘導",comment:"コメント誘導",link:"リンク誘導",benefit:"メリット訴求",curiosity:"好奇心",question:"質問型",contrarian:"逆張り",story:"ストーリー",current:"現在値"},
+      metric:{posts:"投稿数",impressions:"表示回数",likes:"いいね",replies:"リプライ",shares:"シェア",engagementRate:"反応率",revenue_yen:"収益",purchases_count:"購入数",average_conversion_rate:"平均CVR",proposal_adoption_rate:"提案採用率",job_success_rate:"ジョブ成功率",job_error_rate:"エラー率",budget_utilization:"予算消化率",recommendedPostsPerDay:"推奨投稿数/日",minIntervalHours:"最小間隔(時間)",reasoning:"判定理由",slotsUpdated:"更新枠数",source:"データソース"},
+      alert:{"LLM応答のパース失敗":"LLMの応答解析に失敗","ハートビートタイムアウト":"ハートビートがタイムアウト"},
+      log:{
+        "No posts found for followup in the last 24 hours.":"直近24時間にフォロー対象の投稿なし",
+        "[DRY-RUN] Would generate weekly retrospective.":"[テスト] 週次振り返りを生成予定",
+        "[DRY-RUN] Would generate note drafts from winning themes.":"[テスト] 人気テーマからnote下書きを生成予定",
+      },
+    };
+    function tLog(v){if(!v)return"-";const s=String(v);for(const[k,ja]of Object.entries(T.log)){if(s.includes(k))return ja}return s.replace(/Generated (\d+) note drafts?\./,"note下書きを$1件生成").replace(/Auto-published (\d+) notes?/,"$1件を自動公開").replace(/Generated (\d+) drafts?, (\d+) passed audit/,"$1件生成、$2件が監査通過").replace(/Researched (\d+) topics?\./,"$1件のトピックをリサーチ").replace(/Progress notification sent/,"進捗通知を送信").replace(/\(dry-run\)/,"(テスト)").replace(/FAILED:/,"失敗:").replace(/timed out after (\d+)ms/,"$1ms でタイムアウト")}
+    function t(table,v){if(!v)return"-";const s=String(v);return T[table]?.[s]??T[table]?.[s.toLowerCase()]??s}
+    function tPhase(v){return t("phase",v)}
+    function tRole(v){return t("role",v)}
+    function tDept(v){return t("dept",v)}
+    function tStatus(v){return t("status",v)}
+    function tJob(v){return t("job",v)}
+    function tDecision(v){return t("decision",v)}
+    function tReason(v){if(!v)return"-";const s=String(v);for(const[k,ja]of Object.entries(T.reason)){if(s.includes(k))return ja}return s}
+    function tPeriod(v){return t("period",v)}
+    function tPeriodKey(v){return t("periodKey",v)}
+    function tMetric(v){return t("metric",v)}
+
+    /* ── Tab切替 ────────────────────────────────────────── */
+    function switchTab(tabId){
+      document.querySelectorAll(".tab-panel").forEach(p=>p.classList.remove("active"));
+      document.querySelectorAll(".sidebar-link").forEach(l=>l.classList.remove("active"));
+      const panel=document.getElementById("tab-"+tabId);
+      if(panel)panel.classList.add("active");
+      const link=document.querySelector(`[data-tab="${tabId}"]`);
+      if(link)link.classList.add("active");
+      window.scrollTo(0,0);
+    }
+
+    /* ── 一括レビュー操作 ──────────────────────────────── */
+    async function batchReviews(action){
+      const items=document.querySelectorAll("#reviews-list [data-review-id]");
+      for(const item of items){
+        const id=item.dataset.reviewId;
+        await fetch(`/api/dashboard/reviews/${encodeURIComponent(id)}/${action}`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+      }
+      htmx.ajax("GET","/api/dashboard/reviews?status=pending","#reviews-content");
+    }
+
+    /* ── Render: Summary ───────────────────────────────── */
+    function renderSummary(d){
+      const{s,budgets,alerts,decisions,nextHeartbeat}=norm(d);
+      const thread24h=s.threads24h??d?.threads24h,thread7d=s.threads7d??d?.threads7d,note24h=s.notes24h??d?.notes24h,note7d=s.notes7d??d?.notes7d;
+      const currentTheme=s.currentTheme??s.theme??s.topic??s.genre??s.objective??"未設定";
+      const currentPolicy=s.currentPolicy??s.policy??s.direction??s.strategy??"方針未設定";
+      const importantAlerts=a(s.importantAlerts??alerts);
+      const agentHighlights=a(s.agentHighlights??s.agents??d?.agents);
+      const statusVal=s.systemStatus??s.status??s.mode??"normal";
+      const policyDisplay=currentPolicy.replace(/funnel_expansion/g,"ファネル拡大").replace(/bootstrap/g,"立ち上げ").replace(/actions:/g,"").replace(/generate_note/g,"note記事生成").replace(/generate_thread/g,"スレッド生成").replace(/\//g," → ");
+      const cards=[
+        ["テーマ",currentTheme,policyDisplay],
+        ["状態",tStatus(statusVal),s.updatedAt?`更新 ${fd(s.updatedAt)}`:"更新時刻なし"],
+        ["次回HB",nextHeartbeat?.nextAt??s.nextHeartbeatAt??s.nextRunAt??"未設定",nextHeartbeat?.jobName?`${escapeHtml(tJob(String(nextHeartbeat.jobName)))} を監視中`:"次回予定を待機中"],
+        ["アラート",importantAlerts.length,importantAlerts.length?"要対応あり":"問題なし"],
+      ];
+      return`
+        <div class="space-y-5">
+          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">${cards.map(c=>`<div class="metric-card"><div class="metric-label">${escapeHtml(String(c[0]))}</div><div class="metric-value">${escapeHtml(String(c[1]))}</div><div class="metric-sub">${escapeHtml(String(c[2]))}</div></div>`).join("")}</div>
+          <div class="panel rounded-2xl p-4">
+            <div class="section-title mb-3">シグナル</div>
+            <div class="space-y-3">
+              <div><div class="text-xs text-slate-500 uppercase tracking-[0.18em] font-bold">重要アラート</div>${importantAlerts.length?`<ul class="mt-2 space-y-2">${importantAlerts.slice(0,4).map(alert=>{const reason=String(alert.reason??alert.title??alert);const jaReason=T.alert[reason]??reason;return`<li class="flex items-start gap-2 text-sm text-slate-300 border border-white/6 rounded-xl px-3 py-2 bg-white/3"><span class="mt-1 h-2 w-2 rounded-full bg-rose-400 shrink-0"></span><span>${escapeHtml(jaReason)}</span></li>`}).join("")}</ul>`:`<p class="mt-2 text-sm text-slate-500">アラートなし</p>`}</div>
+              <div><div class="text-xs text-slate-500 uppercase tracking-[0.18em] font-bold">最近の判断</div>${decisions.length?`<ul class="mt-2 space-y-2">${decisions.slice(0,4).map(dec=>`<li class="text-sm text-slate-300 border border-white/6 rounded-xl px-3 py-2 bg-white/3"><span class="font-semibold text-cyan-200">${escapeHtml(tDept(dec.channel??dec.scope??"system"))}</span><span class="text-slate-400"> / </span><span>${escapeHtml(tDecision(dec.decisionType??dec.title??dec.type??"decision"))}</span><div class="text-xs text-slate-500 mt-1">${escapeHtml(tReason(dec.reason??dec.summary??""))}</div></li>`).join("")}</ul>`:`<p class="mt-2 text-sm text-slate-500">直近の判断なし</p>`}</div>
+            </div>
+          </div>
+          ${agentHighlights.length?`<div class="panel rounded-2xl p-4"><div class="section-title mb-3">主要担当者</div><table class="w-full text-sm"><tbody>${agentHighlights.slice(0,3).map(agent=>`<tr class="border-b border-white/6"><td class="py-2 pr-3 font-semibold">${escapeHtml(String(agent.name??agent.jobName??""))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tDept(agent.department))} / ${escapeHtml(tRole(agent.role))}</td><td class="py-2 pr-3 text-slate-300">${escapeHtml(String(agent.currentTask??"タスクなし"))}</td><td class="py-2"><span class="${st(agent.status)}">${escapeHtml(tStatus(agent.status??"idle"))}</span></td></tr>`).join("")}</tbody></table></div>`:""}
+          ${thread24h||thread7d||note24h||note7d?`<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">${thread24h?`<div class="metric-card"><div class="metric-label">Threads 24h</div><div class="metric-value">${fn(thread24h.published)} 投稿</div><div class="metric-sub">${fn(thread24h.impressions)} imp / ${fn(thread24h.likes)} いいね</div></div>`:""}${thread7d?`<div class="metric-card"><div class="metric-label">Threads 7日</div><div class="metric-value">${fn(thread7d.published)} 投稿</div><div class="metric-sub">${fn(thread7d.impressions)} imp / ${fn(thread7d.likes)} いいね</div></div>`:""}${note24h?`<div class="metric-card"><div class="metric-label">Note 24h</div><div class="metric-value">${fn(note24h.published)} 記事</div><div class="metric-sub">${fn(note24h.views)} PV / ${fn(note24h.likes)} いいね / ¥${fn(note24h.revenueYen)}</div></div>`:""}${note7d?`<div class="metric-card"><div class="metric-label">Note 7日</div><div class="metric-value">${fn(note7d.published)} 記事</div><div class="metric-sub">${fn(note7d.views)} PV / ${fn(note7d.likes)} いいね / ¥${fn(note7d.revenueYen)}</div></div>`:""}</div>`:""}
+          ${budgets.length?`<div class="panel rounded-2xl p-4"><div class="section-title mb-3">予算概要</div><div class="grid gap-3 lg:grid-cols-3">${budgets.slice(0,3).map(b=>{const tr=pct(b.tokensUsed,b.tokensLimit),cr=pct(b.callsUsed,b.callsLimit),r=Math.max(tr??0,cr??0),fc=r>=.95?"bad":r>=.8?"warn":"good";return`<div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="flex items-center justify-between gap-2"><div><div class="font-semibold text-white">${escapeHtml(String(b.scope??"scope"))}</div><div class="text-xs text-slate-500">${escapeHtml(String(b.period??"heartbeat"))} / ${escapeHtml(String(b.periodKey??""))}</div></div><span class="${r>=.95?"chip chip-bad":r>=.8?"chip chip-warn":"chip chip-good"}">${fp(r)}</span></div><div class="mt-4 space-y-3"><div><div class="flex items-center justify-between text-xs text-slate-500 mb-1"><span>トークン</span><span>${fn(b.tokensUsed)} / ${fn(b.tokensLimit)}</span></div><div class="progress-track"><div class="progress-fill ${fc}" style="width:${Math.min(100,Math.max(0,(tr??0)*100))}%"></div></div></div><div><div class="flex items-center justify-between text-xs text-slate-500 mb-1"><span>呼び出し</span><span>${fn(b.callsUsed)} / ${fn(b.callsLimit)}</span></div><div class="progress-track"><div class="progress-fill ${fc}" style="width:${Math.min(100,Math.max(0,(cr??0)*100))}%"></div></div></div></div></div>`}).join("")}</div></div>`:""}
+        </div>`;
+    }
+
+    /* ── Render: Budget ─────────────────────────────────── */
+    function renderBudget(d){
+      const{budgets,s}=norm(d);const list=budgets.length?budgets:a(s.budgets??s.budget);
+      if(!list.length)return'<p class="text-slate-400">予算データがまだありません。</p>';
+      return`<div class="space-y-3">${list.map(b=>{const tr=pct(b.tokensUsed,b.tokensLimit),cr=pct(b.callsUsed,b.callsLimit),r=Math.max(tr??0,cr??0),fc=r>=.95?"bad":r>=.8?"warn":"good";const rt=Number.isFinite(Number(b.tokensLimit))&&Number.isFinite(Number(b.tokensUsed))?Number(b.tokensLimit)-Number(b.tokensUsed):null;const rc=Number.isFinite(Number(b.callsLimit))&&Number.isFinite(Number(b.callsUsed))?Number(b.callsLimit)-Number(b.callsUsed):null;return`<div class="panel-strong rounded-2xl p-4"><div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between"><div><div class="content-row"><span class="chip chip-info">${escapeHtml(String(b.scope??"scope"))}</span><span class="${r>=.95?"chip chip-bad":r>=.8?"chip chip-warn":"chip chip-good"}">${fp(r)}</span></div><div class="mt-2 text-white font-semibold">${escapeHtml(String(b.period??"heartbeat"))} / ${escapeHtml(String(b.periodKey??""))}</div><div class="text-sm text-slate-400 mt-1">${fd(b.createdAt,"")}${b.createdAt?` ・ 更新 ${fd(b.updatedAt??b.createdAt)}`:""}</div></div><div class="content-row"><span class="chip chip-neutral">残トークン: ${rt==null?"-":fn(rt)}</span><span class="chip chip-neutral">残呼び出し: ${rc==null?"-":fn(rc)}</span></div></div><div class="mt-4 grid gap-3 md:grid-cols-2"><div><div class="flex items-center justify-between text-xs text-slate-500 mb-1"><span>トークン</span><span>${fn(b.tokensUsed)} / ${fn(b.tokensLimit)}</span></div><div class="progress-track"><div class="progress-fill ${fc}" style="width:${Math.min(100,Math.max(0,(tr??0)*100))}%"></div></div></div><div><div class="flex items-center justify-between text-xs text-slate-500 mb-1"><span>呼び出し</span><span>${fn(b.callsUsed)} / ${fn(b.callsLimit)}</span></div><div class="progress-track"><div class="progress-fill ${fc}" style="width:${Math.min(100,Math.max(0,(cr??0)*100))}%"></div></div></div></div></div>`}).join("")}</div>`;
+    }
+
+    /* ── Render: Departments ────────────────────────────── */
+    function renderDepartments(list){if(!list.length)return'<p class="text-slate-400">部署サマリーはまだありません。</p>';return`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-3 pr-3">部署</th><th class="pb-3 pr-3">状態</th><th class="pb-3 pr-3">最新の動き</th><th class="pb-3 pr-3">最終実行</th><th class="pb-3 pr-3">実行数</th><th class="pb-3"></th></tr></thead><tbody>${list.map(d=>`<tr class="border-b border-white/6"><td class="py-3 pr-3 font-semibold">${escapeHtml(tDept(d.department))}</td><td class="py-3 pr-3"><span class="${d.paused?"chip chip-bad":st(d.recentStatus)}">${escapeHtml(d.paused?"停止中":tStatus(d.recentStatus??"-"))}</span></td><td class="py-3 pr-3 text-slate-300">${escapeHtml(tPhase(d.recentPhase??"-"))}</td><td class="py-3 pr-3 text-slate-400 text-xs">${fd(d.lastRunAt,"-")}</td><td class="py-3 pr-3">${fn(d.totalRuns)}</td><td class="py-3"><button type="button" hx-get="/api/dashboard/departments/${encodeURIComponent(d.department)}" hx-target="#department-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-slate-800/85 hover:bg-slate-700/90 text-slate-100 px-3 py-2 rounded-xl border border-white/6 font-semibold">詳細</button></td></tr>`).join("")}</tbody></table></div>`}
+
+    /* ── Render: Agents ─────────────────────────────────── */
+    function renderAgents(list){
+      if(!list.length)return'<p class="text-slate-400">エージェントがまだ登録されていません。</p>';
+      const byStatus={};list.forEach(ae=>{const s=ae.status??"idle";byStatus[s]=(byStatus[s]??0)+1});
+      const collapsed=list.length>8;
+      return`
+        <div class="flex flex-wrap gap-2 mb-4">
+          <span class="chip chip-neutral">全 ${list.length} 名</span>
+          ${Object.entries(byStatus).map(([s,c])=>`<span class="${st(s)}">${escapeHtml(tStatus(s))}: ${c}</span>`).join("")}
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-2 pr-3">名前</th><th class="pb-2 pr-3">所属</th><th class="pb-2 pr-3">役割</th><th class="pb-2 pr-3">状態</th><th class="pb-2 pr-3">最終稼働</th><th class="pb-2"></th></tr></thead><tbody class="collapsible-list${collapsed?"":" expanded"}" id="agents-list">
+          ${list.map(ae=>`<tr class="border-b border-white/6"><td class="py-2 pr-3 font-semibold">${escapeHtml(String(ae.name??ae.jobName??""))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tDept(ae.department))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tRole(ae.role))}</td><td class="py-2 pr-3"><span class="${st(ae.status)}">${escapeHtml(tStatus(ae.status??"idle"))}</span></td><td class="py-2 pr-3 text-slate-400 text-xs">${ae.lastActiveAt?fd(ae.lastActiveAt):"-"}</td><td class="py-2"><button type="button" hx-get="/api/dashboard/agents/${encodeURIComponent(ae.id??ae.jobName)}" hx-target="#agent-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-cyan-500/15 hover:bg-cyan-500/22 text-cyan-100 px-2 py-1 rounded-lg border border-cyan-400/20 font-semibold">詳細</button></td></tr>`).join("")}
+        </tbody></table></div>
+        ${collapsed?`<button type="button" onclick="document.getElementById('agents-list').classList.toggle('expanded');this.textContent=this.textContent==='すべて表示'?'折りたたむ':'すべて表示'" class="ghost-button text-xs bg-slate-800/80 px-3 py-2 rounded-xl mt-3 border border-white/6">すべて表示</button>`:""}`;
+    }
+
+    /* ── Render: Reviews ────────────────────────────────── */
+    function renderReviews(list){
+      if(!list.length)return'<p class="text-slate-400">保留中の項目はありません。すべて自動処理済みです。</p>';
+      const collapsed=list.length>5;
+      return`
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm text-slate-500">${list.length}件が自動処理できず停止中</span>
+          <div class="flex gap-2">
+            <button type="button" onclick="batchReviews('approve')" class="ghost-button text-xs bg-emerald-500/15 hover:bg-emerald-500/22 text-emerald-100 px-3 py-2 rounded-xl border border-emerald-400/20 font-semibold">全件クリア</button>
+            <button type="button" onclick="batchReviews('reject')" class="ghost-button text-xs bg-rose-500/15 hover:bg-rose-500/22 text-rose-100 px-3 py-2 rounded-xl border border-rose-400/20 font-semibold">全件差し戻し</button>
+          </div>
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-2 pr-3">種別</th><th class="pb-2 pr-3">原因</th><th class="pb-2 pr-3">発生日時</th><th class="pb-2">操作</th></tr></thead><tbody class="collapsible-list${collapsed?"":" expanded"}" id="reviews-list">
+          ${list.map(rv=>{const jaType=rv.itemType==="thread_draft"?"スレッド下書き":rv.itemType==="note_draft"?"note下書き":rv.itemType;const jaReason=T.alert[rv.reason]??rv.reason;return`<tr class="border-b border-white/6" data-review-id="${escapeHtml(String(rv.id))}"><td class="py-2 pr-3"><span class="chip chip-neutral">${escapeHtml(jaType)}</span></td><td class="py-2 pr-3 text-slate-300 text-xs">${escapeHtml(jaReason)}</td><td class="py-2 pr-3 text-slate-400 text-xs">${fd(rv.createdAt,"-")}</td><td class="py-2"><div class="flex gap-1"><button type="button" hx-post="/api/dashboard/reviews/${encodeURIComponent(rv.id)}/approve" hx-target="#reviews-content" hx-swap="innerHTML" hx-vals='{}' class="ghost-button text-xs bg-emerald-500/15 text-emerald-100 px-2 py-1 rounded-lg border border-emerald-400/20">OK</button><button type="button" hx-post="/api/dashboard/reviews/${encodeURIComponent(rv.id)}/reject" hx-target="#reviews-content" hx-swap="innerHTML" hx-vals='{}' class="ghost-button text-xs bg-rose-500/15 text-rose-100 px-2 py-1 rounded-lg border border-rose-400/20">戻す</button></div></td></tr>`}).join("")}
+        </tbody></table></div>
+        ${collapsed?`<button type="button" onclick="document.getElementById('reviews-list').classList.toggle('expanded');this.textContent=this.textContent==='すべて表示'?'折りたたむ':'すべて表示'" class="ghost-button text-xs bg-slate-800/80 px-3 py-2 rounded-xl mt-3 border border-white/6">すべて表示</button>`:""}`;
+    }
+
+    /* ── Render: Proposals ──────────────────────────────── */
+    function renderProposals(rawList){
+      const list=(Array.isArray(rawList)?rawList:rawList?.proposals??[]).filter(p=>p.status!=="approved"&&p.status!=="rejected");
+      if(!list.length)return'<p class="text-slate-400">承認待ちの提案はありません。</p>';
+      return`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-3 pr-3">内容</th><th class="pb-3 pr-3">部署</th><th class="pb-3 pr-3">理由</th><th class="pb-3 pr-3">日時</th><th class="pb-3">操作</th></tr></thead><tbody>${list.map(p=>`<tr class="border-b border-white/6"><td class="py-3 pr-3"><div class="font-semibold">${escapeHtml(tDecision(p.title))}</div><div class="text-xs text-slate-400 mt-1">${fmtJson(p.expectedEffect)}</div></td><td class="py-3 pr-3 text-slate-400">${escapeHtml(tDept(p.department))}</td><td class="py-3 pr-3 text-slate-300 text-xs">${escapeHtml(tReason(p.reason))}</td><td class="py-3 pr-3 text-slate-400 text-xs">${fd(p.createdAt,"-")}</td><td class="py-3"><div class="flex gap-1"><button type="button" hx-get="/api/dashboard/proposals/${encodeURIComponent(p.id)}" hx-target="#proposal-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-cyan-500/15 text-cyan-100 px-2 py-1 rounded-lg border border-cyan-400/20 font-semibold">詳細</button><button type="button" hx-post="/api/dashboard/proposals/${encodeURIComponent(p.id)}/approve" hx-target="#proposals-content" hx-swap="innerHTML" class="ghost-button text-xs bg-emerald-500/15 text-emerald-100 px-2 py-1 rounded-lg border border-emerald-400/20 font-semibold">承認</button><button type="button" hx-post="/api/dashboard/proposals/${encodeURIComponent(p.id)}/reject" hx-target="#proposals-content" hx-swap="innerHTML" class="ghost-button text-xs bg-rose-500/15 text-rose-100 px-2 py-1 rounded-lg border border-rose-400/20 font-semibold">却下</button></div></td></tr>`).join("")}</tbody></table></div>`}
+
+    /* ── Render: Logs ────────────────────────────────────── */
+    function renderLogs(data){const rows=data.rows??[];if(!rows.length)return'<p class="text-slate-400">ログはまだありません。</p>';const totalPages=Math.max(1,Math.ceil((data.total??0)/(data.perPage??1)));return`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-3 pr-4">ジョブ</th><th class="pb-3 pr-4">状態</th><th class="pb-3 pr-4">開始</th><th class="pb-3 pr-4">終了</th><th class="pb-3 pr-4">概要</th></tr></thead><tbody>${rows.map(r=>`<tr class="border-b border-white/6"><td class="py-3 pr-4 font-medium">${escapeHtml(tJob(r.jobName))}</td><td class="py-3 pr-4"><span class="${st(r.status)}">${escapeHtml(tStatus(r.status))}</span></td><td class="py-3 pr-4 text-slate-400 text-xs">${fd(r.startedAt,"-")}</td><td class="py-3 pr-4 text-slate-400 text-xs">${fd(r.finishedAt,"-")}</td><td class="py-3 pr-4 text-slate-300 text-xs log-summary">${escapeHtml(tLog(r.resultSummary))}</td></tr>`).join("")}</tbody></table></div><div class="flex items-center gap-2 mt-4 text-sm">${(data.page??1)>1?`<button type="button" hx-get="/api/dashboard/logs?page=${(data.page??1)-1}&perPage=${data.perPage??20}" hx-target="#logs-content" hx-swap="innerHTML" class="ghost-button bg-slate-800/80 px-3 py-2 rounded-xl hover:bg-slate-700/90 transition border border-white/6">前へ</button>`:""}<span class="text-slate-500 py-1">${data.page??1} / ${totalPages} ページ</span>${(data.page??1)<totalPages?`<button type="button" hx-get="/api/dashboard/logs?page=${(data.page??1)+1}&perPage=${data.perPage??20}" hx-target="#logs-content" hx-swap="innerHTML" class="ghost-button bg-slate-800/80 px-3 py-2 rounded-xl hover:bg-slate-700/90 transition border border-white/6">次へ</button>`:""}</div>`}
+
+    /* ── Render: KPI ──────────────────────────────────────── */
+    function renderKpi(list){if(!list.length)return'<p class="text-slate-400">KPI スナップショットはまだありません。</p>';return`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-3 pr-4">チャネル</th><th class="pb-3 pr-4">分類</th><th class="pb-3 pr-4">区分</th><th class="pb-3 pr-4">指標</th><th class="pb-3 pr-4">日時</th></tr></thead><tbody>${list.map(r=>`<tr class="border-b border-white/6"><td class="py-3 pr-4 font-medium">${escapeHtml(tDept(r.channel))}</td><td class="py-3 pr-4 text-slate-400">${escapeHtml(tPeriod(r.periodType))}</td><td class="py-3 pr-4 text-slate-400">${escapeHtml(tPeriodKey(r.periodKey)||r.periodKey)}</td><td class="py-3 pr-4 text-slate-300 text-xs">${fmtJson(r.metrics)}</td><td class="py-3 pr-4 text-slate-400 text-xs">${fd(r.createdAt,"-")}</td></tr>`).join("")}</tbody></table></div>`}
+
+    /* ── Render: Proposal Detail ──────────────────────────── */
+    function renderProposalDetail(data){
+      const proposal=data?.proposal??data??{};const history=a(data?.history??[]);const controls=a(data?.relatedDepartmentControls??[]);
+      return`<div class="space-y-4"><div class="flex items-start justify-between gap-3"><div><div class="section-title">提案の詳細</div><div class="text-xl font-bold text-white mt-2">${escapeHtml(String(proposal.title??"proposal"))}</div><div class="text-sm text-slate-400 mt-1">${escapeHtml(String(proposal.department??"-"))} / ${escapeHtml(String(proposal.agentId??"agent"))}</div></div><span class="${st(proposal.status)}">${escapeHtml(String(proposal.status??"pending"))}</span></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">説明</div><div class="mt-2 text-slate-200 leading-6">${escapeHtml(String(proposal.description??"-"))}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">理由 / 効果</div><div class="mt-2 text-slate-200 leading-6">${escapeHtml(String(proposal.reason??"-"))}</div><div class="mt-3 text-sm text-slate-400">${fmtJson(proposal.expectedEffect)}</div></div></div><div class="content-row"><span class="chip chip-neutral">段階 ${escapeHtml(String(data?.currentStage??proposal.currentStage??"-"))}</span>${proposal.currentApproverId?`<span class="chip chip-info">承認者 ${escapeHtml(String(proposal.currentApproverId))}</span>`:""}<span class="chip chip-neutral">作成 ${fd(proposal.createdAt,"-")}</span></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">履歴</div>${history.length?`<div class="space-y-3">${history.map(item=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-info">${escapeHtml(String(item.stage))}</span><span class="${st(item.action)}">${escapeHtml(String(item.action))}</span><span class="text-xs text-slate-500">${fd(item.createdAt,"-")}</span></div><div class="mt-2 text-sm text-slate-200">${escapeHtml(String(item.note??"-"))}</div><div class="mt-1 text-xs text-slate-500">実行者: ${escapeHtml(String(item.actorId))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">履歴はまだありません。</p>`}</div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">関連操作</div>${controls.length?`<div class="space-y-2">${controls.map(c=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(c.scope))}</span><span class="${st(c.action)}">${escapeHtml(String(c.action))}</span><span class="text-xs text-slate-500">${fd(c.createdAt,"-")}</span></div><div class="text-sm text-slate-300 mt-2">${escapeHtml(String(c.reason))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">関連操作はありません。</p>`}</div></div>`}
+
+    /* ── Render: Department Detail ────────────────────────── */
+    function renderDepartmentDetail(data){
+      const signals=data?.signals??{};const proposals=a(data?.proposals??[]);const agents=a(data?.agents??[]);const importantAlerts=a(data?.importantAlerts??[]);const controls=a(data?.controls??[]);
+      return`<div class="space-y-4"><div class="flex items-start justify-between gap-3"><div><div class="section-title">部署の詳細</div><div class="text-xl font-bold text-white mt-2">${escapeHtml(tDept(data?.department))}</div><div class="text-sm text-slate-400 mt-1">${escapeHtml(String(data?.currentTheme??"未設定"))}</div></div><span class="${data?.paused?"chip chip-bad":"chip chip-good"}">${escapeHtml(String(data?.paused?"停止中":"稼働中"))}</span></div><div class="panel rounded-2xl p-4"><div class="text-sm text-slate-300 leading-6">${escapeHtml(String(data?.currentPolicy??"方針未設定"))}</div><div class="mt-3 content-row"><span class="chip chip-neutral">実行 ${fn(data?.runs?.length??0)}</span><span class="chip chip-neutral">担当者 ${fn(agents.length)}</span><span class="chip chip-neutral">提案 ${fn(proposals.length)}</span><span class="chip chip-neutral">アラート ${fn(importantAlerts.length)}</span></div></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">入力</div><div class="mt-2 space-y-2">${a(signals.inputs).length?a(signals.inputs).slice(0,5).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">入力情報なし</p>'}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">出力</div><div class="mt-2 space-y-2">${a(signals.outputs).length?a(signals.outputs).slice(0,5).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">出力成果物なし</p>'}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">停滞事項</div><div class="mt-2 space-y-2">${a(signals.blockers).length?a(signals.blockers).slice(0,5).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">停滞事項なし</p>'}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">確認事項 / 優先タスク</div><div class="mt-2 space-y-2">${a(signals.questions).length?a(signals.questions).slice(0,3).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">要確認事項なし</p>'}${a(signals.priorityTasks).length?`<div class="mt-3 space-y-2">${a(signals.priorityTasks).slice(0,3).map(item=>`<div class="text-sm text-cyan-100 border border-cyan-400/15 rounded-xl bg-cyan-400/8 p-2">${escapeHtml(String(item))}</div>`).join("")}</div>`:""}</div></div></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">停止 / 再開</div><div class="flex flex-wrap gap-2"><button type="button" hx-post="/api/dashboard/control/departments/${encodeURIComponent(data?.department??"")}/pause" hx-target="#department-action-result" hx-swap="innerHTML" class="ghost-button text-xs bg-rose-500/15 hover:bg-rose-500/22 text-rose-100 px-3 py-2 rounded-xl border border-rose-400/20 font-semibold">停止</button><button type="button" hx-post="/api/dashboard/control/departments/${encodeURIComponent(data?.department??"")}/resume" hx-target="#department-action-result" hx-swap="innerHTML" class="ghost-button text-xs bg-emerald-500/15 hover:bg-emerald-500/22 text-emerald-100 px-3 py-2 rounded-xl border border-emerald-400/20 font-semibold">再開</button></div><div id="department-action-result" class="text-sm text-slate-300 mt-3"></div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">HB / 担当者ディレクティブ</div><form hx-post="/api/dashboard/control/directives" hx-target="#department-action-result" hx-swap="innerHTML" class="space-y-3"><input type="hidden" name="scope" value="${escapeHtml(String(data?.department??"global"))}" /><div class="grid gap-3 sm:grid-cols-2"><select name="target" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"><option value="next_heartbeat">次回HB重点</option><option value="assignee">担当者指示</option></select><select name="priority" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select></div><div class="grid gap-3 sm:grid-cols-2"><input type="text" name="department" value="${escapeHtml(String(data?.department??""))}" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" placeholder="部署" /><input type="text" name="agentId" placeholder="エージェントID" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" /></div><textarea name="content" rows="3" class="w-full bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" placeholder="次回HBで何を優先するか / 誰に何を指示するかを一文で書く"></textarea><button type="submit" class="ghost-button text-xs bg-cyan-500/15 hover:bg-cyan-500/22 text-cyan-100 px-3 py-2 rounded-xl border border-cyan-400/20 font-semibold">送信</button></form></div></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">保留中の提案</div>${proposals.length?`<div class="space-y-2">${proposals.slice(0,4).map(item=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(item.priority??"medium"))}</span><span class="${st(item.status)}">${escapeHtml(String(item.status??"pending"))}</span></div><div class="mt-2 text-sm text-slate-200">${escapeHtml(String(item.title))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">未処理提案なし</p>`}</div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">稼働中の担当者</div>${agents.length?`<div class="space-y-2">${agents.slice(0,4).map(agent=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="flex items-center justify-between gap-3"><div><div class="font-semibold text-white">${escapeHtml(String(agent.name??agent.jobName))}</div><div class="text-xs text-slate-500 mt-1">${escapeHtml(String(agent.role??"-"))}</div></div><span class="${st(agent.status)}">${escapeHtml(String(agent.status??"idle"))}</span></div><div class="mt-2 text-sm text-slate-300">${escapeHtml(String(agent.currentTask??"現在タスクなし"))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">担当者なし</p>`}</div></div>${importantAlerts.length?`<div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">重要アラート</div><div class="space-y-2">${importantAlerts.map(alert=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(alert.type??"alert"))}</span><span class="text-xs text-slate-500">${fd(alert.createdAt,"-")}</span></div><div class="text-sm text-slate-200 mt-2">${escapeHtml(String(alert.reason??"-"))}</div></div>`).join("")}</div></div>`:""}</div>`}
+
+    /* ── Render: Agent Detail ──────────────────────────────── */
+    function renderAgentDetail(data){
+      const agent=data??{};const recentProposals=a(agent.recentProposals??[]);
+      return`<div class="space-y-4"><div class="flex items-start justify-between gap-3"><div><div class="section-title">エージェントの詳細</div><div class="text-xl font-bold text-white mt-2">${escapeHtml(String(agent.name??agent.jobName??""))}</div><div class="text-sm text-slate-400 mt-1">${escapeHtml(tDept(agent.department))} / ${escapeHtml(tRole(agent.role))}</div></div><span class="${st(agent.status)}">${escapeHtml(tStatus(agent.status??"idle"))}</span></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">現在タスク</div><div class="mt-2 text-slate-200 leading-6">${escapeHtml(String(agent.currentTask??"-"))}</div><div class="mt-3 content-row"><span class="chip chip-neutral">トークン ${fn(agent.budgetUsedTokens??0)}</span><span class="chip chip-neutral">呼び出し ${fn(agent.budgetUsedCalls??0)}</span>${agent.lastActiveAt?`<span class="chip chip-neutral">最終稼働 ${fd(agent.lastActiveAt)}</span>`:""}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">最終完了タスク</div><div class="mt-2 text-slate-200 leading-6">${escapeHtml(String(agent.lastCompletedTask??"-"))}</div><div class="mt-3 content-row">${agent.locked?`<span class="chip chip-warn">ロック中</span>`:""} ${agent.lockedBy?`<span class="chip chip-neutral">ロック者 ${escapeHtml(String(agent.lockedBy))}</span>`:""} ${agent.nextNotificationAt?`<span class="chip chip-info">次回通知 ${fd(agent.nextNotificationAt)}</span>`:""}</div></div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">最近の提案</div>${recentProposals.length?`<div class="space-y-2">${recentProposals.slice(0,5).map(item=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(item.department??"-"))}</span><span class="${st(item.status)}">${escapeHtml(String(item.status??"pending"))}</span></div><div class="mt-2 text-sm text-slate-200">${escapeHtml(String(item.title))}</div><div class="mt-1 text-xs text-slate-500">${escapeHtml(String(item.currentStage??"-"))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">提案履歴なし</p>`}</div>${agent.budget?`<div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">部署予算</div><div class="text-sm text-slate-300">スコープ: ${escapeHtml(String(agent.budget.scope??"-"))}</div><div class="mt-2 content-row"><span class="chip chip-neutral">残トークン ${fn(agent.budget.tokensRemaining)}</span><span class="chip chip-neutral">残呼び出し ${fn(agent.budget.callsRemaining)}</span><span class="chip ${agent.budget.utilization>.85?"chip-bad":"chip-good"}">${fp(agent.budget.utilization)}</span></div></div>`:""}</div>`}
+
+    /* ── Render: Notice ────────────────────────────────────── */
+    function renderNotice(data){const payload=typeof data==="string"?data:JSON.stringify(data,null,2);return`<pre class="whitespace-pre-wrap rounded-2xl border border-white/8 bg-slate-950/75 p-4 text-sm text-slate-200">${escapeHtml(payload)}</pre>`}
+
+    /* ── HTMX Events ──────────────────────────────────────── */
+    document.body.addEventListener("htmx:beforeSwap",(evt)=>{
+      const target=evt.detail?.target,text=evt.detail?.xhr?.responseText??"";
+      let data;try{data=JSON.parse(text)}catch{return}
+      if(!target?.id)return;
+      if(target.id==="summary-content")evt.detail.serverResponse=renderSummary(data);
+      else if(target.id==="budget-content")evt.detail.serverResponse=renderBudget(data);
+      else if(target.id==="departments-content")evt.detail.serverResponse=renderDepartments(data);
+      else if(target.id==="agents-content")evt.detail.serverResponse=renderAgents(data);
+      else if(target.id==="reviews-content")evt.detail.serverResponse=renderReviews(data);
+      else if(target.id==="proposals-content")evt.detail.serverResponse=renderProposals(data);
+      else if(target.id==="proposal-detail-content")evt.detail.serverResponse=renderProposalDetail(data);
+      else if(target.id==="department-detail-content")evt.detail.serverResponse=renderDepartmentDetail(data);
+      else if(target.id==="agent-detail-content")evt.detail.serverResponse=renderAgentDetail(data);
+      else if(target.id==="department-action-result")evt.detail.serverResponse=renderNotice(data);
+      else if(target.id==="logs-content")evt.detail.serverResponse=renderLogs(data);
+      else if(target.id==="kpi-content")evt.detail.serverResponse=renderKpi(data);
+      else if(target.id==="control-result"||target.id==="directive-result")evt.detail.serverResponse=renderNotice(data);
+    });
+
+    document.body.addEventListener("htmx:afterSwap",()=>{
+      const el=document.getElementById("last-updated");
+      if(el)el.textContent=new Date().toLocaleTimeString("ja-JP");
+      htmx.process(document.body);
+    });
+  </script>
+</body>
+</html>
