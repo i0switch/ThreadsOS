@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ExternalApiError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 import { loadEnv } from "../../config/env.js";
+import { waitForRateLimit } from "../../utils/network-policy.js";
 
 const THREADS_API_BASE = "https://graph.threads.net/v1.0";
 
@@ -40,14 +41,19 @@ const userProfileResponseSchema = z.object({
   threads_profile_picture_url: z.string().optional(),
 });
 const insightMetricNames = ["views", "likes", "replies", "shares"] as const;
-const insightMetricAliases: Record<InsightMetricName, readonly string[]> = {
+type InsightMetricName = (typeof insightMetricNames)[number];
+type InsightMetricOrImpression = InsightMetricName | "impressions";
+
+const insightMetricAliases: Record<
+  InsightMetricOrImpression,
+  readonly string[]
+> = {
+  impressions: ["impressions", "views"],
   views: ["views", "impressions"],
   likes: ["likes"],
   replies: ["replies"],
   shares: ["shares", "reposts"],
 };
-
-type InsightMetricName = (typeof insightMetricNames)[number];
 
 export class ThreadsGraphApiClient implements ThreadsApiClient {
   private accessToken: string;
@@ -60,23 +66,23 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
   }
 
   private async request<T>(url: string, options: RequestInit = {}): Promise<T> {
-    const separator = url.includes("?") ? "&" : "?";
-    const fullUrl = `${url}${separator}access_token=${this.accessToken}`;
-
-    logger.debug(
-      { url: url.replace(this.accessToken, "***") },
-      "Threads API request",
-    );
+    logger.debug({ url }, "Threads API request");
 
     const maxRetries = 3;
     let lastError: unknown;
+    const env = loadEnv();
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      const response = await fetch(fullUrl, {
+      await waitForRateLimit(
+        "threads-api",
+        Math.min(env.SCRAPER_RATE_LIMIT_MS, 1000),
+      );
+      const response = await fetch(url, {
         ...options,
         headers: {
           "Content-Type": "application/json",
           ...options.headers,
+          Authorization: `Bearer ${this.accessToken}`,
         },
       });
 
@@ -88,7 +94,7 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
       const errorBody = await response.text();
 
       if (status === 429) {
-        if (attempt >= 1) {
+        if (attempt >= maxRetries) {
           throw new ExternalApiError(
             "Threads API",
             `429 (rate limit): ${errorBody}`,
@@ -256,7 +262,7 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
 
   private async fetchSingleInsightMetric(
     postId: string,
-    metric: InsightMetricName,
+    metric: InsightMetricOrImpression,
   ): Promise<number> {
     const aliases = insightMetricAliases[metric] ?? [metric];
 
@@ -300,9 +306,13 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
     views: number;
   }> {
     const metrics = await this.fetchInsightsMetrics(postId, insightMetricNames);
+    const impressions =
+      metrics.views > 0
+        ? metrics.views
+        : await this.fetchSingleInsightMetric(postId, "impressions");
 
     return {
-      impressions: metrics.views,
+      impressions,
       likes: metrics.likes,
       replies: metrics.replies,
       shares: metrics.shares,

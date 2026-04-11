@@ -15,4 +15,11 @@ if (env.DATABASE_URL !== ":memory:") {
 }
 
 const sqlite = new Database(env.DATABASE_URL);
+sqlite.pragma("foreign_keys = ON");
+sqlite.pragma("busy_timeout = 5000");
+sqlite.pragma("temp_store = MEMORY");
+if (env.DATABASE_URL !== ":memory:") {
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("synchronous = NORMAL");
+}
 export const db = drizzle(sqlite, { schema });

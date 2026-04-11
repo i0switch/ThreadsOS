@@ -1,8 +1,13 @@
-import { sql } from "drizzle-orm";
+﻿import { sql } from "drizzle-orm";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
+
+import type {
+  LlmClient,
+  LlmGenerateOptions,
+} from "../src/adapters/llm/index.js";
 
 type Db = typeof import("../src/db/index.js")["db"];
 type SchemaModule = typeof import("../src/db/schema.js");
@@ -12,6 +17,72 @@ type ExecutiveServiceCtor =
 let db: Db;
 let schema: SchemaModule;
 let ExecutiveServiceImpl: ExecutiveServiceCtor;
+
+class MockLlmClient implements LlmClient {
+  constructor(private response: string) {}
+  async generate(
+    _prompt: string,
+    _options?: LlmGenerateOptions,
+  ): Promise<string> {
+    return this.response;
+  }
+  async audit() {
+    return {
+      verdict: "pass" as const,
+      severity: "low" as const,
+      reasons: [],
+      suggestions: [],
+      score: 8,
+    };
+  }
+}
+
+function makeReports() {
+  return [
+    {
+      department: "command" as const,
+      summary: "待機中",
+      metrics: { pendingInputs: 0 },
+      recommendation: "動く必要なし",
+      lastExecutedAt: null,
+    },
+    {
+      department: "research" as const,
+      summary: "リサーチ済み",
+      metrics: { hoursSinceLastResearch: 2, activeTopics: 3 },
+      recommendation: "動く必要なし",
+      lastExecutedAt: null,
+    },
+    {
+      department: "threads" as const,
+      summary: "在庫あり",
+      metrics: { pendingDrafts: 3, dueSlots: 0 },
+      recommendation: "動く必要なし",
+      lastExecutedAt: null,
+    },
+    {
+      department: "note" as const,
+      summary: "実績ゼロ",
+      metrics: { pendingNoteDrafts: 0, dueNoteSlots: 0, publishedNotes: 0 },
+      recommendation: "note実績ゼロ。記事生成を最優先",
+      lastExecutedAt: null,
+    },
+    {
+      department: "community" as const,
+      summary: "待機中",
+      metrics: { pendingReplies: 0, avgEngagement: 0 },
+      recommendation: "動く必要なし",
+      lastExecutedAt: null,
+    },
+    {
+      department: "optimization" as const,
+      summary: "振り返り未実施",
+      metrics: { daysSinceRetro: 999 },
+      recommendation: "週次振り返り推奨",
+      lastExecutedAt: null,
+    },
+  ];
+}
 
 beforeAll(async () => {
   ({ db } = await import("../src/db/index.js"));
@@ -39,82 +110,33 @@ beforeEach(() => {
 });
 
 describe("ExecutiveService", () => {
-  it("persists heartbeat strategy state and cycle metadata", async () => {
-    const now = new Date().toISOString();
+  it("uses LLM decision to approve/skip actions", async () => {
     const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient(
+      JSON.stringify({
+        objective: "funnel_expansion",
+        funnelStage: "bootstrap",
+        approvedActionTypes: ["generate_note"],
+        reasoning: "note実績ゼロのため記事生成を最優先",
+        departmentInstructions: { note: "恋愛ジャンルで記事生成" },
+      }),
+    );
 
-    db.insert(schema.topics)
-      .values({
-        id: "topic-1",
-        name: "勝ちテーマ",
-        niche: "ビジネス",
-        priorityScore: 90,
-        status: "active",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    db.insert(schema.threadPostDrafts)
-      .values({
-        id: "draft-1",
-        topicId: "topic-1",
-        body: "本文",
-        hookType: "story",
-        ctaType: "comment",
-        noteTransition: null,
-        status: "published",
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-    db.insert(schema.threadPostResults)
-      .values({
-        id: "result-1",
-        draftId: "draft-1",
-        threadsPostId: "threads-1",
-        impressions: 1000,
-        likes: 120,
-        repliesCount: 20,
-        shares: 10,
-        publishedAt: now,
-        createdAt: now,
-      })
-      .run();
-    db.insert(schema.contentSlots)
-      .values({
-        id: "note-slot-1",
-        channel: "note",
-        scheduledAt: now,
-        topicId: "topic-1",
-        draftId: null,
-        status: "pending",
-        priority: 10,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-
-    const cycle = await service.beginHeartbeatCycle([
-      { type: "generate_note", priority: 1, reason: "note枠あり" },
-      { type: "generate_and_post", priority: 2, reason: "threads枠あり" },
-    ]);
+    const cycle = await service.beginHeartbeatCycle(
+      makeReports(),
+      [
+        { type: "generate_note", priority: 1, reason: "note枠あり" },
+        { type: "generate_and_post", priority: 2, reason: "threads枠あり" },
+      ],
+      llm,
+    );
 
     expect(cycle.objective).toBe("funnel_expansion");
-    expect(cycle.strategy.priorityTopics).toContain("勝ちテーマ");
     expect(cycle.approvedActions).toEqual([
       { type: "generate_note", priority: 1, reason: "note枠あり" },
     ]);
-    expect(cycle.skippedActions).toEqual([
-      {
-        action: {
-          type: "generate_and_post",
-          priority: 2,
-          reason: "threads枠あり",
-        },
-        reason:
-          "executive deferred threads generation in favor of note expansion",
-      },
-    ]);
+    expect(cycle.skippedActions).toHaveLength(1);
+    expect(cycle.skippedActions[0].action.type).toBe("generate_and_post");
     expect(cycle.directives.some((item) => item.department === "note")).toBe(
       true,
     );
@@ -127,107 +149,38 @@ describe("ExecutiveService", () => {
     expect(executiveCycles[0].status).toBe("running");
   });
 
-  it("suppresses heavy generation while pending directives are being assimilated", async () => {
-    const now = new Date().toISOString();
+  it("falls back when LLM returns invalid JSON", async () => {
     const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient("this is not json at all");
 
-    db.insert(schema.humanInputs)
-      .values({
-        id: "human-input-1",
-        inputType: "directive",
-        content: "新テーマを追加",
-        processed: 0,
-        createdAt: now,
-        processedAt: null,
-      })
-      .run();
+    const cycle = await service.beginHeartbeatCycle(
+      makeReports(),
+      [
+        { type: "generate_note", priority: 1, reason: "note枠" },
+        { type: "reply_safe", priority: 2, reason: "replies" },
+      ],
+      llm,
+    );
 
-    const cycle = await service.beginHeartbeatCycle([
-      { type: "process_human_inputs", priority: 1, reason: "pending inputs" },
-      { type: "generate_note", priority: 2, reason: "note slot" },
-      { type: "research_threads", priority: 3, reason: "stale research" },
-    ]);
-
-    expect(cycle.objective).toBe("directive_assimilation");
-    expect(cycle.approvedActions).toEqual([
-      {
-        type: "process_human_inputs",
-        priority: 1,
-        reason: "pending inputs",
-      },
-    ]);
-    expect(cycle.skippedActions).toEqual([
-      {
-        action: {
-          type: "generate_note",
-          priority: 2,
-          reason: "note slot",
-        },
-        reason: "executive deferred while assimilating pending directives",
-      },
-      {
-        action: {
-          type: "research_threads",
-          priority: 3,
-          reason: "stale research",
-        },
-        reason: "executive deferred while assimilating pending directives",
-      },
-    ]);
-  });
-
-  it("prioritizes engagement work over new generation in engagement mode", async () => {
-    const now = new Date().toISOString();
-    const service = new ExecutiveServiceImpl();
-
-    db.insert(schema.notePostResults)
-      .values({
-        id: "note-post-1",
-        draftId: "draft-note-1",
-        noteUrl: "https://note.com/example/n/test",
-        title: "existing note",
-        priceYen: null,
-        publishedAt: now,
-        createdAt: now,
-      })
-      .run();
-    db.insert(schema.replyDecisions)
-      .values({
-        id: "reply-decision-1",
-        replyId: "reply-1",
-        decision: "safe_auto_reply",
-        autoReplyBody: "ありがとう",
-        sentAt: null,
-        createdAt: now,
-      })
-      .run();
-
-    const cycle = await service.beginHeartbeatCycle([
-      { type: "fetch_engagement", priority: 1, reason: "recent posts" },
-      { type: "reply_safe", priority: 2, reason: "safe replies queued" },
-      { type: "generate_note", priority: 3, reason: "note slot" },
-    ]);
-
-    expect(cycle.objective).toBe("engagement_compounding");
-    expect(cycle.approvedActions).toEqual([
-      { type: "fetch_engagement", priority: 1, reason: "recent posts" },
-      { type: "reply_safe", priority: 2, reason: "safe replies queued" },
-    ]);
-    expect(cycle.skippedActions).toEqual([
-      {
-        action: {
-          type: "generate_note",
-          priority: 3,
-          reason: "note slot",
-        },
-        reason: "executive deferred to prioritize engagement follow-up",
-      },
-    ]);
+    // Fallback: approve up to 3 candidates
+    expect(cycle.approvedActions).toHaveLength(2);
+    expect(cycle.objective).toBe("funnel_expansion");
+    expect(cycle.funnelStage).toBe("bootstrap");
   });
 
   it("stores department runs and completes the cycle", async () => {
     const service = new ExecutiveServiceImpl();
-    const cycle = await service.beginHeartbeatCycle([]);
+    const llm = new MockLlmClient(
+      JSON.stringify({
+        objective: "funnel_expansion",
+        funnelStage: "bootstrap",
+        approvedActionTypes: [],
+        reasoning: "何もしない",
+        departmentInstructions: {},
+      }),
+    );
+
+    const cycle = await service.beginHeartbeatCycle(makeReports(), [], llm);
 
     await service.recordDepartmentRun({
       cycleId: cycle.cycleId,
@@ -250,5 +203,91 @@ describe("ExecutiveService", () => {
     expect(departmentRuns[0].department).toBe("threads");
     expect(cycles[0].status).toBe("completed");
     expect(cycles[0].summary).toContain("Auto-published");
+  });
+
+  it("fallback persists strategy_states and executive_cycles", async () => {
+    const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient("not-json-at-all");
+
+    const cycle = await service.beginHeartbeatCycle(
+      makeReports(),
+      [{ type: "generate_note", priority: 1, reason: "note枠" }],
+      llm,
+    );
+
+    expect(cycle.llmReasoning).toBeDefined();
+    expect(cycle.approvedActions).toHaveLength(1); // bounded fallback
+
+    const strategies = db.select().from(schema.strategyStates).all();
+    const cycles = db.select().from(schema.executiveCycles).all();
+
+    expect(strategies).toHaveLength(1);
+    expect(cycles).toHaveLength(1);
+    expect(cycles[0].status).toBe("running");
+  });
+
+  it("exposes llmReasoning and departmentInstructions on normal plan", async () => {
+    const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient(
+      JSON.stringify({
+        objective: "funnel_expansion",
+        funnelStage: "bootstrap",
+        approvedActionTypes: ["generate_note"],
+        reasoning: "test-reasoning-value",
+        departmentInstructions: { note: "記事生成開始" },
+      }),
+    );
+
+    const cycle = await service.beginHeartbeatCycle(
+      makeReports(),
+      [{ type: "generate_note", priority: 1, reason: "note枠" }],
+      llm,
+    );
+
+    expect(cycle.llmReasoning).toBe("test-reasoning-value");
+    expect(cycle.departmentInstructions).toEqual({ note: "記事生成開始" });
+  });
+
+  it("normalizes invalid objective and funnelStage from LLM", async () => {
+    const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient(
+      JSON.stringify({
+        objective: "world_domination",
+        funnelStage: "quantum_tunnel",
+        approvedActionTypes: [],
+        reasoning: "bad fields test",
+        departmentInstructions: {},
+      }),
+    );
+
+    const cycle = await service.beginHeartbeatCycle(makeReports(), [], llm);
+
+    expect(cycle.objective).toBe("funnel_expansion");
+    expect(cycle.funnelStage).toBe("bootstrap");
+  });
+
+  it("filters invalid action types from LLM without crashing", async () => {
+    const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient(
+      JSON.stringify({
+        objective: "funnel_expansion",
+        funnelStage: "bootstrap",
+        approvedActionTypes: ["generate_note", "totally_invalid_action_xyz"],
+        reasoning: "filter test",
+        departmentInstructions: {},
+      }),
+    );
+
+    const cycle = await service.beginHeartbeatCycle(
+      makeReports(),
+      [
+        { type: "generate_note", priority: 1, reason: "note枠" },
+        { type: "generate_and_post", priority: 2, reason: "threads枠" },
+      ],
+      llm,
+    );
+
+    expect(cycle.approvedActions).toHaveLength(1);
+    expect(cycle.approvedActions[0].type).toBe("generate_note");
   });
 });

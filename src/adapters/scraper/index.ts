@@ -1,4 +1,9 @@
 import { logger } from "../../app/logger.js";
+import { loadEnv } from "../../config/env.js";
+import {
+  assertSafePublicUrl,
+  waitForRateLimit,
+} from "../../utils/network-policy.js";
 
 const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
@@ -87,6 +92,7 @@ async function fetchHtml(
   url: string,
   retries = DEFAULT_RETRIES,
 ): Promise<string> {
+  const rateLimitMs = loadEnv().SCRAPER_RATE_LIMIT_MS;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -94,6 +100,7 @@ async function fetchHtml(
     const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
     try {
+      await waitForRateLimit("scraper", rateLimitMs);
       const response = await fetch(url, {
         headers: {
           "User-Agent": BROWSER_UA,
@@ -172,7 +179,11 @@ export class ScraperClientImpl implements ScraperClient {
   }
 
   async scrapeNoteAuthor(authorUrl: string): Promise<ScrapedNoteArticle[]> {
-    const html = await this.loadHtml(authorUrl);
+    const safeUrl = assertSafePublicUrl(authorUrl, {
+      allowSubdomainsOf: ["note.com"],
+      requireHttps: true,
+    });
+    const html = await this.loadHtml(safeUrl.toString());
     if (!html) {
       return [];
     }
@@ -181,7 +192,10 @@ export class ScraperClientImpl implements ScraperClient {
     const title = extractMeta(html, "og:title") ?? "note author page";
     const author =
       extractMeta(html, "author") ??
-      authorUrl.replace(/^https?:\/\/note\.com\//, "").replace(/\/.*$/, "");
+      safeUrl
+        .toString()
+        .replace(/^https?:\/\/note\.com\//, "")
+        .replace(/\/.*$/, "");
     const candidateUrls = collectUrls(
       html,
       /https:\/\/note\.com\/[^"' <]+\/[^"' <]+/g,

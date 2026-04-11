@@ -26,6 +26,11 @@ export interface NoteArticleSummary {
   views: number;
   likes: number;
   comments?: number;
+  priceYen?: number;
+  purchasesCount?: number;
+  revenueYen?: number;
+  conversionRate?: number;
+  trafficSource?: string;
   publishedAt?: string;
 }
 
@@ -55,6 +60,11 @@ export interface NoteApiClient {
     views: number;
     likes: number;
     comments: number;
+    priceYen?: number;
+    purchasesCount?: number;
+    revenueYen?: number;
+    conversionRate?: number;
+    trafficSource?: string;
     publishedAt?: string;
   }>;
 }
@@ -120,6 +130,30 @@ function parseArticleList(raw: unknown): NoteArticleSummary[] {
     const likes = Number(record.likes ?? 0);
     const comments =
       record.comments !== undefined ? Number(record.comments) : undefined;
+    const priceYen =
+      record.price !== undefined ? Number(record.price) : undefined;
+    const purchasesCount =
+      record.purchaseCount !== undefined
+        ? Number(record.purchaseCount)
+        : record.salesCount !== undefined
+          ? Number(record.salesCount)
+          : undefined;
+    const revenueYen =
+      record.revenue !== undefined
+        ? Number(record.revenue)
+        : record.salesAmount !== undefined
+          ? Number(record.salesAmount)
+          : undefined;
+    const conversionRate =
+      record.conversionRate !== undefined
+        ? Number(record.conversionRate)
+        : record.cvRate !== undefined
+          ? Number(record.cvRate)
+          : undefined;
+    const trafficSource =
+      typeof record.trafficSource === "string"
+        ? record.trafficSource
+        : undefined;
     const publishedAt = record.publishedAt
       ? String(record.publishedAt)
       : undefined;
@@ -127,7 +161,20 @@ function parseArticleList(raw: unknown): NoteArticleSummary[] {
       continue;
     }
 
-    items.push({ id, title, url, views, likes, comments, publishedAt });
+    items.push({
+      id,
+      title,
+      url,
+      views,
+      likes,
+      comments,
+      priceYen,
+      purchasesCount,
+      revenueYen,
+      conversionRate,
+      trafficSource,
+      publishedAt,
+    });
   }
 
   return items;
@@ -137,6 +184,11 @@ function parseStats(raw: unknown): {
   views: number;
   likes: number;
   comments: number;
+  priceYen?: number;
+  purchasesCount?: number;
+  revenueYen?: number;
+  conversionRate?: number;
+  trafficSource?: string;
   publishedAt?: string;
 } {
   if (!raw || typeof raw !== "object") {
@@ -151,6 +203,29 @@ function parseStats(raw: unknown): {
     views: Number(source.views ?? source.viewCount ?? 0),
     likes: Number(source.likes ?? source.likeCount ?? 0),
     comments: Number(source.comments ?? source.commentCount ?? 0),
+    priceYen: source.price !== undefined ? Number(source.price) : undefined,
+    purchasesCount:
+      source.purchaseCount !== undefined
+        ? Number(source.purchaseCount)
+        : source.salesCount !== undefined
+          ? Number(source.salesCount)
+          : undefined,
+    revenueYen:
+      source.revenue !== undefined
+        ? Number(source.revenue)
+        : source.salesAmount !== undefined
+          ? Number(source.salesAmount)
+          : undefined,
+    conversionRate:
+      source.conversionRate !== undefined
+        ? Number(source.conversionRate)
+        : source.cvRate !== undefined
+          ? Number(source.cvRate)
+          : undefined,
+    trafficSource:
+      typeof source.trafficSource === "string"
+        ? source.trafficSource
+        : undefined,
     publishedAt: source.publishedAt ? String(source.publishedAt) : undefined,
   };
 }
@@ -499,6 +574,11 @@ export class NoteApiClientImpl implements NoteApiClient {
     views: number;
     likes: number;
     comments: number;
+    priceYen?: number;
+    purchasesCount?: number;
+    revenueYen?: number;
+    conversionRate?: number;
+    trafficSource?: string;
     publishedAt?: string;
   }> {
     const response = await this.requestJsonCandidates([
@@ -540,15 +620,14 @@ export class PlaywrightNoteApiClient implements NoteApiClient {
       paidBoundary?: number;
     },
   ): Promise<{ noteId: string; url: string; publishedAt?: string }> {
+    const draftContext = buildDraftContext(title, body, options);
     const result = await this.client.publishArticle({
       title,
       body,
       isPaid: options?.isPaid ?? false,
       priceYen: options?.priceYen,
-      freePreviewMarkdown: buildDraftContext(title, body, options)
-        .freePreviewMarkdown,
-      paidContentMarkdown: buildDraftContext(title, body, options)
-        .paidContentMarkdown,
+      freePreviewMarkdown: draftContext.freePreviewMarkdown,
+      paidContentMarkdown: draftContext.paidContentMarkdown,
       targetState: "published",
     });
     return {
@@ -575,6 +654,11 @@ export class PlaywrightNoteApiClient implements NoteApiClient {
         views: a.views,
         likes: a.likes,
         comments: a.comments,
+        priceYen: a.priceYen,
+        purchasesCount: a.purchasesCount,
+        revenueYen: a.revenueYen,
+        conversionRate: a.conversionRate,
+        trafficSource: a.trafficSource,
         publishedAt: a.publishedAt,
       }));
     } catch (error) {
@@ -590,6 +674,11 @@ export class PlaywrightNoteApiClient implements NoteApiClient {
     views: number;
     likes: number;
     comments: number;
+    priceYen?: number;
+    purchasesCount?: number;
+    revenueYen?: number;
+    conversionRate?: number;
+    trafficSource?: string;
     publishedAt?: string;
   }> {
     try {
@@ -650,6 +739,11 @@ export class DryRunNoteApiClient implements NoteApiClient {
     views: number;
     likes: number;
     comments: number;
+    priceYen?: number;
+    purchasesCount?: number;
+    revenueYen?: number;
+    conversionRate?: number;
+    trafficSource?: string;
     publishedAt?: string;
   }> {
     return { views: 0, likes: 0, comments: 0 };

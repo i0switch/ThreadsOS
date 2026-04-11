@@ -6,11 +6,12 @@
  * .env ファイルの設定と初回ジャンル登録をガイドする。
  */
 
-import { createInterface } from "node:readline/promises";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
+import { atomicWriteTextFile } from "../utils/atomic-file.js";
 
 const projectRoot = path.resolve(
   fileURLToPath(new URL(".", import.meta.url)),
@@ -48,7 +49,7 @@ async function writeEnv(entries: Map<string, string>): Promise<void> {
   for (const [key, value] of entries) {
     lines.push(`${key}=${value}`);
   }
-  await fs.writeFile(envPath, lines.join("\n") + "\n", "utf-8");
+  await atomicWriteTextFile(envPath, `${lines.join("\n")}\n`);
 }
 
 async function saveGenre(genre: string): Promise<void> {
@@ -82,14 +83,14 @@ async function main(): Promise<void> {
   const env = await loadExistingEnv();
   const isUpdate = env.size > 0;
   if (isUpdate) {
-    console.log("既存の .env を検出しました。値を変更する場合のみ入力してください。\n");
+    console.log(
+      "既存の .env を検出しました。値を変更する場合のみ入力してください。\n",
+    );
   }
 
   // ── Threads API ──────────────────────────────────────────────────
   console.log("【Threads API 設定】");
-  console.log(
-    "THREADS_ACCESS_TOKEN は Meta Graph API から取得してください。",
-  );
+  console.log("THREADS_ACCESS_TOKEN は Meta Graph API から取得してください。");
   const threadsToken = await ask(
     "THREADS_ACCESS_TOKEN",
     env.get("THREADS_ACCESS_TOKEN") ?? "",

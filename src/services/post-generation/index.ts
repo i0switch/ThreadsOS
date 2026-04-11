@@ -74,6 +74,7 @@ ${insightsSection}
       temperature: 0.8,
       systemPrompt:
         "Return ONLY a valid JSON array as requested. No explanation, no preamble, no markdown code blocks.",
+      tier: "standard",
     });
 
     const parsed =
@@ -199,7 +200,10 @@ ${feedback}
   "noteTransition": "noteへの展開仮説"
 }`;
 
-    const raw = await llm.generate(prompt, { temperature: 0.7 });
+    const raw = await llm.generate(prompt, {
+      temperature: 0.7,
+      tier: "standard",
+    });
     const parsed = parseJsonObject<{
       body: string;
       hookType: string;

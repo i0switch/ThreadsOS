@@ -23,11 +23,13 @@ import type {
   ThreadPostDraft,
 } from "../../domain/threads/index.js";
 import { EngagementAnalysisServiceImpl } from "../engagement-analysis/index.js";
+import { createMemoryService } from "../memory/index.js";
 import { NoteAuditServiceImpl } from "../note-audit/index.js";
 import { NoteGenerationServiceImpl } from "../note-generation/index.js";
 import { PostAuditServiceImpl } from "../post-audit/index.js";
 import { PostGenerationServiceImpl } from "../post-generation/index.js";
 import { ResearchServiceImpl } from "../research/index.js";
+import { createRetrievalService } from "../retrieval/index.js";
 import { TopicSelectionServiceImpl } from "../topic-selection/index.js";
 
 const MAX_THREAD_REVISION_ATTEMPTS = 3;
@@ -84,6 +86,15 @@ export class OrchestrationServiceImpl implements OrchestrationService {
   private noteGenService = new NoteGenerationServiceImpl();
   private noteAuditService = new NoteAuditServiceImpl();
   private engagementService = new EngagementAnalysisServiceImpl();
+  private memoryService = createMemoryService();
+  private retrievalService = createRetrievalService(this.memoryService);
+
+  private buildTaskContext(query: string, scope: string): string {
+    return this.retrievalService.buildContext(query, {
+      scope,
+      limit: 5,
+    });
+  }
 
   private buildThreadRevisionFeedback(audit: ThreadPostAudit): string {
     return [...audit.suggestions, ...audit.reasons]
@@ -485,11 +496,16 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       );
       const summary =
         await this.researchService.summarizeResearch(researchItems);
+      const retrievalContext = this.buildTaskContext(topic.name, "threads");
+      const mergedSummary = [summary, retrievalContext]
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .join("\n");
 
       const drafts = await this.postGenService.generateDrafts(
         topic.id,
         topic.name,
-        summary,
+        mergedSummary,
         5,
         llm,
         insightsSummary,
@@ -567,6 +583,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
         `${topic.niche}に関心のある読者`,
         topic.id,
       );
+      const retrievalContext = this.buildTaskContext(topic.name, "note");
 
       const titles = await this.noteGenService.generateTitleCandidates(
         idea.id,
@@ -577,12 +594,14 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       const outline = await this.noteGenService.generateOutline(
         idea.id,
         titles[0],
+        retrievalContext,
         llm,
       );
       const draft = await this.noteGenService.generateDraft(
         idea.id,
         titles[0],
         outline,
+        retrievalContext,
         llm,
       );
       notesGenerated++;
@@ -611,6 +630,12 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     if (dryRun) return "[DRY-RUN] Would generate weekly retrospective.";
 
     const report = await this.engagementService.generateWeeklyReport(llm);
+    this.memoryService.set(
+      "department_summary",
+      "optimization",
+      "weekly-retro",
+      report,
+    );
 
     const now = new Date();
     const weekNum = Math.ceil(

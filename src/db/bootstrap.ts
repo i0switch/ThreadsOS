@@ -164,6 +164,17 @@ export function ensureAutonomyTables(): void {
     created_at TEXT NOT NULL
   )`);
 
+  db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS scheduled_job_runs_job_started_idx
+    ON scheduled_job_runs (job_name, started_at)`),
+  );
+
+  db.run(
+    sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS scheduled_job_runs_running_job_unique
+    ON scheduled_job_runs (job_name)
+    WHERE status = 'running'`),
+  );
+
   db.run(sql`CREATE TABLE IF NOT EXISTS strategy_states (
     key TEXT PRIMARY KEY NOT NULL,
     scope TEXT NOT NULL,
@@ -196,6 +207,11 @@ export function ensureAutonomyTables(): void {
     payload_json TEXT,
     created_at TEXT NOT NULL
   )`);
+
+  db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS department_runs_department_created_idx
+    ON department_runs (department, created_at)`),
+  );
 
   db.run(sql`CREATE TABLE IF NOT EXISTS operator_profiles (
     id TEXT PRIMARY KEY NOT NULL,
@@ -241,13 +257,66 @@ export function ensureAutonomyTables(): void {
   db.run(sql`CREATE TABLE IF NOT EXISTS note_post_results (
     id TEXT PRIMARY KEY NOT NULL,
     draft_id TEXT NOT NULL,
+    title TEXT,
     note_url TEXT,
+    price_yen INTEGER,
     views INTEGER NOT NULL DEFAULT 0,
     likes INTEGER NOT NULL DEFAULT 0,
     comments_count INTEGER NOT NULL DEFAULT 0,
+    purchases_count INTEGER NOT NULL DEFAULT 0,
+    revenue_yen INTEGER NOT NULL DEFAULT 0,
+    conversion_rate REAL NOT NULL DEFAULT 0,
+    traffic_source TEXT,
     published_at TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`);
+
+  try {
+    db.run(sql.raw("ALTER TABLE note_post_results ADD COLUMN title TEXT"));
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw("ALTER TABLE note_post_results ADD COLUMN price_yen INTEGER"),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw(
+        "ALTER TABLE note_post_results ADD COLUMN purchases_count INTEGER NOT NULL DEFAULT 0",
+      ),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw(
+        "ALTER TABLE note_post_results ADD COLUMN revenue_yen INTEGER NOT NULL DEFAULT 0",
+      ),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw(
+        "ALTER TABLE note_post_results ADD COLUMN conversion_rate REAL NOT NULL DEFAULT 0",
+      ),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw("ALTER TABLE note_post_results ADD COLUMN traffic_source TEXT"),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
 
   db.run(sql`CREATE TABLE IF NOT EXISTS note_ideas (
     id TEXT PRIMARY KEY NOT NULL,
@@ -318,5 +387,173 @@ export function ensureAutonomyTables(): void {
   db.run(
     sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS human_review_items_item_type_item_id_unique
     ON human_review_items (item_type, item_id)`),
+  );
+
+  // Phase 2 tables
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS memory_entries (
+    id TEXT PRIMARY KEY NOT NULL,
+    layer TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS memory_entries_layer_scope_key_unique
+    ON memory_entries (layer, scope, key)`),
+  );
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS agent_states (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    department TEXT NOT NULL,
+    role TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'idle',
+    current_task TEXT,
+    last_completed_task TEXT,
+    budget_used_tokens INTEGER NOT NULL DEFAULT 0,
+    budget_used_calls INTEGER NOT NULL DEFAULT 0,
+    last_active_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS proposals (
+    id TEXT PRIMARY KEY NOT NULL,
+    agent_id TEXT NOT NULL,
+    leader_agent_id TEXT,
+    executive_agent_id TEXT,
+    department TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    expected_effect TEXT NOT NULL,
+    risk TEXT,
+    priority TEXT NOT NULL DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'pending',
+    current_stage TEXT NOT NULL DEFAULT 'human_review',
+    current_approver_id TEXT,
+    reviewer_note TEXT,
+    reviewed_at TEXT,
+    executed_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+
+  try {
+    db.run(sql.raw("ALTER TABLE proposals ADD COLUMN leader_agent_id TEXT"));
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(sql.raw("ALTER TABLE proposals ADD COLUMN executive_agent_id TEXT"));
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw(
+        "ALTER TABLE proposals ADD COLUMN current_stage TEXT NOT NULL DEFAULT 'human_review'",
+      ),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+  try {
+    db.run(
+      sql.raw("ALTER TABLE proposals ADD COLUMN current_approver_id TEXT"),
+    );
+  } catch (error) {
+    ignoreDuplicateColumn(error);
+  }
+
+  db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS proposals_status_department_created_idx
+    ON proposals (status, department, created_at)`),
+  );
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS proposal_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    proposal_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    note TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS proposal_events_proposal_created_idx
+    ON proposal_events (proposal_id, created_at)`),
+  );
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS budget_tracking (
+    id TEXT PRIMARY KEY NOT NULL,
+    scope TEXT NOT NULL,
+    period TEXT NOT NULL,
+    period_key TEXT NOT NULL,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    calls_used INTEGER NOT NULL DEFAULT 0,
+    tokens_limit INTEGER NOT NULL,
+    calls_limit INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS budget_tracking_scope_period_key_unique
+    ON budget_tracking (scope, period, period_key)`),
+  );
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS kpi_snapshots (
+    id TEXT PRIMARY KEY NOT NULL,
+    channel TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    metric_value REAL NOT NULL,
+    period_type TEXT NOT NULL,
+    period_key TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS kpi_snapshots_channel_metric_period_unique
+    ON kpi_snapshots (channel, metric_name, period_type, period_key)`),
+  );
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS department_summaries (
+    id TEXT PRIMARY KEY NOT NULL,
+    department TEXT NOT NULL,
+    summary_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    period_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE UNIQUE INDEX IF NOT EXISTS department_summaries_dept_type_period_unique
+    ON department_summaries (department, summary_type, period_key)`),
+  );
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS system_controls (
+    id TEXT PRIMARY KEY NOT NULL,
+    scope TEXT NOT NULL,
+    action TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    created_by TEXT NOT NULL DEFAULT 'system',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+  )`);
+
+  db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS system_controls_scope_action_active_idx
+    ON system_controls (scope, action, active)`),
   );
 }

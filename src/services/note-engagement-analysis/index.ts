@@ -13,6 +13,10 @@ import {
   threadPostResults,
 } from "../../db/schema.js";
 import { parseJsonArray as parseLlmJsonArray } from "../../utils/llm-json.js";
+import {
+  buildTrafficSource,
+  parseTrafficSource,
+} from "../auto-publisher/index.js";
 
 export interface NoteEngagementInsight {
   insight: string;
@@ -36,6 +40,9 @@ interface EnrichedNoteRecord {
   views: number;
   likes: number;
   comments: number;
+  purchasesCount: number;
+  revenueYen: number;
+  conversionRate: number;
 }
 
 function formatJstDate(date: Date): string {
@@ -111,6 +118,11 @@ function buildFallbackInsights(
     records.reduce((sum, row) => sum + row.likes, 0) / records.length;
   const averageComments =
     records.reduce((sum, row) => sum + row.comments, 0) / records.length;
+  const totalRevenue = records.reduce((sum, row) => sum + row.revenueYen, 0);
+  const totalPurchases = records.reduce(
+    (sum, row) => sum + row.purchasesCount,
+    0,
+  );
 
   const insights: NoteEngagementInsight[] = [
     {
@@ -136,7 +148,92 @@ function buildFallbackInsights(
     });
   }
 
+  if (totalRevenue <= 0 || totalPurchases <= 0) {
+    insights.push({
+      insight: "売上または購入実績がまだ弱い",
+      action:
+        "冒頭で得られる変化と購入後の具体成果を先に提示して、無料/有料の境界を明確にする",
+      priority: "high",
+    });
+  }
+
+  const averageCv =
+    records.reduce((sum, row) => sum + row.conversionRate, 0) / records.length;
+  const averagePrice =
+    records.reduce(
+      (sum, row) =>
+        sum + inferPriceFromRevenue(row.revenueYen, row.purchasesCount),
+      0,
+    ) / records.length;
+
+  if (averageCv >= 0.04 && totalPurchases >= 3) {
+    insights.push({
+      insight: "CVと購入数が十分に出ている",
+      action: `次回は価格を少し上げても崩れにくい。目安は現状平均 ${Math.round(averagePrice).toLocaleString("ja-JP")} 円以上`,
+      priority: "medium",
+    });
+  } else if (averageViews >= 150 && averageCv <= 0.01) {
+    insights.push({
+      insight: "閲覧はあるがCVが低い",
+      action: "価格を一段下げるか、無料プレビューを広げて購入前の不安を減らす",
+      priority: "high",
+    });
+  }
+
   return insights;
+}
+
+function inferPriceFromRevenue(
+  revenueYen: number,
+  purchasesCount: number,
+): number {
+  if (purchasesCount <= 0) {
+    return 0;
+  }
+  return revenueYen / purchasesCount;
+}
+
+function normalizeNoteMetrics(params: {
+  existingPriceYen: number | null;
+  articlePriceYen?: number;
+  statsPriceYen?: number;
+  articlePurchasesCount?: number;
+  statsPurchasesCount?: number;
+  articleRevenueYen?: number;
+  statsRevenueYen?: number;
+  articleConversionRate?: number;
+  statsConversionRate?: number;
+  views: number;
+}): {
+  priceYen: number;
+  purchasesCount: number;
+  revenueYen: number;
+  conversionRate: number;
+} {
+  const priceYen =
+    params.statsPriceYen ??
+    params.articlePriceYen ??
+    params.existingPriceYen ??
+    0;
+  const purchasesCount =
+    params.statsPurchasesCount ?? params.articlePurchasesCount ?? 0;
+  const revenueYen =
+    params.statsRevenueYen ??
+    params.articleRevenueYen ??
+    (priceYen > 0 && purchasesCount > 0 ? priceYen * purchasesCount : 0);
+  const conversionRate =
+    params.statsConversionRate ??
+    params.articleConversionRate ??
+    (params.views > 0 && purchasesCount > 0
+      ? purchasesCount / params.views
+      : 0);
+
+  return {
+    priceYen,
+    purchasesCount,
+    revenueYen,
+    conversionRate,
+  };
 }
 
 async function saveSnapshot(
@@ -186,14 +283,26 @@ function summarizeGroup(
   const totalViews = records.reduce((sum, row) => sum + row.views, 0);
   const totalLikes = records.reduce((sum, row) => sum + row.likes, 0);
   const totalComments = records.reduce((sum, row) => sum + row.comments, 0);
+  const totalPurchases = records.reduce(
+    (sum, row) => sum + row.purchasesCount,
+    0,
+  );
+  const totalRevenue = records.reduce((sum, row) => sum + row.revenueYen, 0);
   return {
     count: records.length,
     totalViews,
     totalLikes,
     totalComments,
+    totalPurchases,
+    totalRevenue,
     avgViews: records.length > 0 ? totalViews / records.length : 0,
     avgLikes: records.length > 0 ? totalLikes / records.length : 0,
     avgComments: records.length > 0 ? totalComments / records.length : 0,
+    avgConversionRate:
+      records.length > 0
+        ? records.reduce((sum, row) => sum + row.conversionRate, 0) /
+          records.length
+        : 0,
     topTitle: records[0]?.title ?? "",
   };
 }
@@ -218,33 +327,99 @@ export class NoteEngagementAnalysisServiceImpl
         .from(notePostResults)
         .where(eq(notePostResults.noteUrl, article.url))
         .get();
+      const pendingSyncRecord = matchedDraft
+        ? db
+            .select()
+            .from(notePostResults)
+            .where(eq(notePostResults.draftId, matchedDraft.id))
+            .all()
+            .find(
+              (row) =>
+                parseTrafficSource(row.trafficSource).metadata.status ===
+                "sync_pending",
+            )
+        : null;
+      const targetRow = existing ?? pendingSyncRecord;
       const draftId = matchedDraft?.id ?? article.id;
       const publishedAt = stats.publishedAt ?? article.publishedAt ?? now;
+      const normalized = normalizeNoteMetrics({
+        existingPriceYen: targetRow?.priceYen ?? null,
+        articlePriceYen: article.priceYen,
+        statsPriceYen: stats.priceYen,
+        articlePurchasesCount: article.purchasesCount,
+        statsPurchasesCount: stats.purchasesCount,
+        articleRevenueYen: article.revenueYen,
+        statsRevenueYen: stats.revenueYen,
+        articleConversionRate: article.conversionRate,
+        statsConversionRate: stats.conversionRate,
+        views: stats.views,
+      });
+      const parsedTrafficSource = parseTrafficSource(targetRow?.trafficSource);
+      const trafficSource =
+        parsedTrafficSource.metadata.status === "sync_pending"
+          ? buildTrafficSource(parsedTrafficSource.source, {
+              status: "recovered_sync",
+              noteId: parsedTrafficSource.metadata.noteId ?? article.id,
+            })
+          : (stats.trafficSource ??
+            article.trafficSource ??
+            targetRow?.trafficSource ??
+            "threads");
 
-      if (existing) {
+      if (targetRow) {
         db.update(notePostResults)
           .set({
             draftId,
+            title: matchedDraft?.title ?? article.title,
+            noteUrl: article.url,
+            priceYen: normalized.priceYen,
             views: stats.views,
             likes: stats.likes,
             commentsCount: stats.comments,
+            purchasesCount: normalized.purchasesCount,
+            revenueYen: normalized.revenueYen,
+            conversionRate: normalized.conversionRate,
+            trafficSource,
             publishedAt,
             createdAt: now,
           })
-          .where(eq(notePostResults.id, existing.id))
+          .where(eq(notePostResults.id, targetRow.id))
           .run();
       } else {
         db.insert(notePostResults)
           .values({
             id: randomUUID(),
             draftId,
+            title: matchedDraft?.title ?? article.title,
             noteUrl: article.url,
+            priceYen: normalized.priceYen,
             views: stats.views,
             likes: stats.likes,
             commentsCount: stats.comments,
+            purchasesCount: normalized.purchasesCount,
+            revenueYen: normalized.revenueYen,
+            conversionRate: normalized.conversionRate,
+            trafficSource,
             publishedAt,
             createdAt: now,
           })
+          .run();
+      }
+
+      if (matchedDraft) {
+        db.update(noteDrafts)
+          .set({
+            status: "published",
+            updatedAt: now,
+          })
+          .where(eq(noteDrafts.id, matchedDraft.id))
+          .run();
+
+        db.update(noteIdeas)
+          .set({
+            status: "published",
+          })
+          .where(eq(noteIdeas.id, matchedDraft.ideaId))
           .run();
       }
 
@@ -293,6 +468,9 @@ export class NoteEngagementAnalysisServiceImpl
         views: row.views,
         likes: row.likes,
         comments: row.commentsCount,
+        purchasesCount: row.purchasesCount,
+        revenueYen: row.revenueYen,
+        conversionRate: row.conversionRate,
       });
     }
 
@@ -377,7 +555,10 @@ ${JSON.stringify(
 
     let insights: NoteEngagementInsight[] = [];
     try {
-      const raw = await llm.generate(prompt, { temperature: 0.4 });
+      const raw = await llm.generate(prompt, {
+        temperature: 0.4,
+        tier: "premium",
+      });
       insights = parseJsonArray(raw);
     } catch (error) {
       logger.warn({ error }, "Failed to generate note performance insights");
@@ -462,7 +643,10 @@ ${JSON.stringify(
 `;
 
     try {
-      const raw = await llm.generate(prompt, { temperature: 0.3 });
+      const raw = await llm.generate(prompt, {
+        temperature: 0.3,
+        tier: "standard",
+      });
       return raw.trim();
     } catch (error) {
       logger.warn(

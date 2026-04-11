@@ -1,0 +1,82 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
+import Fastify from "fastify";
+import { loadEnv } from "../config/env.js";
+import { dashboardRoutes } from "../dashboard/routes.js";
+
+type BuildServerOptions = {
+  dashboardToken?: string;
+  logger?: boolean;
+};
+
+export async function buildServer(options: BuildServerOptions = {}) {
+  const env = loadEnv();
+  const dashboardToken =
+    options.dashboardToken !== undefined
+      ? options.dashboardToken.trim()
+      : env.DASHBOARD_AUTH_TOKEN?.trim();
+
+  const app = Fastify({ logger: options.logger ?? true });
+
+  await app.register(helmet, {
+    contentSecurityPolicy: false,
+    global: true,
+  });
+
+  await app.register(rateLimit, {
+    global: true,
+    max: 120,
+    timeWindow: "1 minute",
+    allowList: (request) => request.ip === "127.0.0.1" || request.ip === "::1",
+  });
+
+  app.get("/health", async () => ({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+  }));
+
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.url === "/health") {
+      return;
+    }
+
+    if (!dashboardToken) {
+      return;
+    }
+
+    const bearerToken = request.headers.authorization?.startsWith("Bearer ")
+      ? request.headers.authorization.slice("Bearer ".length)
+      : null;
+    const headerToken =
+      typeof request.headers["x-dashboard-token"] === "string"
+        ? request.headers["x-dashboard-token"]
+        : null;
+
+    if (bearerToken === dashboardToken || headerToken === dashboardToken) {
+      return;
+    }
+
+    reply.code(401).send({
+      error: "dashboard authentication required",
+    });
+  });
+
+  const dashboardPublicDir = resolve(
+    fileURLToPath(new URL(".", import.meta.url)),
+    "../dashboard/public",
+  );
+
+  await app.register(fastifyStatic, {
+    root: dashboardPublicDir,
+    prefix: "/",
+    decorateReply: false,
+  });
+
+  await app.register(dashboardRoutes);
+  await app.ready();
+
+  return app;
+}

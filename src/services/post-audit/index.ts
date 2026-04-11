@@ -46,7 +46,9 @@ export class PostAuditServiceImpl implements PostAuditService {
 
     if (profile) {
       if (profile.forbiddenTopics.length > 0) {
-        criteria.push(`禁止トピックを含んでいる (${profile.forbiddenTopics.join(", ")})`);
+        criteria.push(
+          `禁止トピックを含んでいる (${profile.forbiddenTopics.join(", ")})`,
+        );
       }
       if (profile.tone) {
         criteria.push(`指定トーンからズレている (${profile.tone})`);

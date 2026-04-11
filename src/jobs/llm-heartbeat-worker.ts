@@ -17,14 +17,17 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { and, eq } from "drizzle-orm";
 import { logger } from "../app/logger.js";
+import { loadEnv } from "../config/env.js";
 import { db } from "../db/index.js";
 import { llmTaskQueue } from "../db/schema.js";
 
 const LOCK_FILE = join(process.cwd(), "tmp", "llm-worker.lock");
+type LlmTier = "fast" | "standard" | "premium";
 type HeartbeatTaskOptions = {
   maxTokens?: number;
   temperature?: number;
   systemPrompt?: string;
+  tier?: LlmTier;
 };
 
 function acquireLock(): boolean {
@@ -112,8 +115,30 @@ export function buildClaudeSystemPrompt(
   return merged || undefined;
 }
 
-export function buildClaudeCliArgs(systemPrompt?: string): string[] {
-  const args = ["--print", "--output-format", "text", "--model", "sonnet"];
+export function resolveClaudeCliModel(tier?: LlmTier): string {
+  const env = loadEnv();
+  const resolvedTier = tier ?? env.LLM_DEFAULT_TIER;
+  switch (resolvedTier) {
+    case "fast":
+      return env.LLM_HEARTBEAT_MODEL_FAST;
+    case "premium":
+      return env.LLM_HEARTBEAT_MODEL_PREMIUM;
+    default:
+      return env.LLM_HEARTBEAT_MODEL_STANDARD;
+  }
+}
+
+export function buildClaudeCliArgs(
+  systemPrompt?: string,
+  options: HeartbeatTaskOptions = {},
+): string[] {
+  const args = [
+    "--print",
+    "--output-format",
+    "text",
+    "--model",
+    resolveClaudeCliModel(options.tier),
+  ];
   if (systemPrompt) {
     args.push("--system-prompt", systemPrompt);
   }
@@ -126,7 +151,7 @@ function callClaudeCli(
   options: HeartbeatTaskOptions = {},
 ): string {
   const mergedSystemPrompt = buildClaudeSystemPrompt(systemPrompt, options);
-  const args = buildClaudeCliArgs(mergedSystemPrompt);
+  const args = buildClaudeCliArgs(mergedSystemPrompt, options);
 
   // プロンプトを stdin から渡す
   const result = spawnSync("claude", args, {

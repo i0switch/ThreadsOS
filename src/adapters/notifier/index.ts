@@ -3,7 +3,12 @@ import { join, resolve } from "node:path";
 import { AppError, ExternalApiError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 
-export type NotificationChannel = "progress" | "action_needed" | "alert" | "critical" | "recovery";
+export type NotificationChannel =
+  | "progress"
+  | "action_needed"
+  | "alert"
+  | "critical"
+  | "recovery";
 
 export interface NotifierClient {
   send(
@@ -101,7 +106,6 @@ export class DiscordWebhookNotifier implements NotifierClient {
     return { id, channel, destination: "discord" };
   }
 }
-
 
 export function createNotifier(
   options: { discordWebhookUrl?: string; fileDir?: string } = {},

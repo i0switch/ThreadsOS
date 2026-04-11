@@ -32,12 +32,14 @@ export interface NoteGenerationService {
   generateOutline(
     ideaId: string,
     title: string,
+    retrievalContext: string,
     llm: LlmClient,
   ): Promise<string>;
   generateDraft(
     ideaId: string,
     title: string,
     outline: string,
+    retrievalContext: string,
     llm: LlmClient,
   ): Promise<NoteDraft>;
   getDraft(draftId: string): Promise<NoteDraft | null>;
@@ -192,13 +194,17 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
 ## 回答形式 (JSON配列)
 ["タイトル1", "タイトル2", "タイトル3", "タイトル4", "タイトル5"]`;
 
-    const raw = await llm.generate(prompt, { temperature: 0.8 });
+    const raw = await llm.generate(prompt, {
+      temperature: 0.8,
+      tier: "fast",
+    });
     return parseJsonArray<string>(raw) ?? [];
   }
 
   async generateOutline(
     ideaId: string,
     title: string,
+    retrievalContext: string,
     llm: LlmClient,
   ): Promise<string> {
     const idea = db
@@ -220,7 +226,7 @@ ${idea.angle}
 ## 想定読者
 ${idea.targetReader}
 
-${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
+${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrievalContext ? `## 関連メモリ/RAG参照\n${retrievalContext}\n` : ""}
 ## 要件
 - H2/H3レベルの見出し構成
 - 各セクションの概要を1〜2行で
@@ -229,13 +235,14 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
 
 マークダウン形式で返してください。`;
 
-    return llm.generate(prompt, { temperature: 0.6 });
+    return llm.generate(prompt, { temperature: 0.6, tier: "standard" });
   }
 
   async generateDraft(
     ideaId: string,
     title: string,
     outline: string,
+    retrievalContext: string,
     llm: LlmClient,
   ): Promise<NoteDraft> {
     const idea = db
@@ -265,7 +272,7 @@ ${idea.angle}
 ## 想定読者
 ${idea.targetReader}
 
-${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
+${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrievalContext ? `## 関連メモリ/RAG参照\n${retrievalContext}\n` : ""}
 ## 要件
 - 具体的な事例・数字を含める
 - 読者に「自分ごと」として感じさせる
@@ -275,16 +282,16 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
 
 本文のみをマークダウンで返してください。`;
 
-    const body = await llm.generate(prompt, { temperature: 0.7 });
-
     const ctaPrompt = `以下のnote記事に適したCTAを1つ作成してください。自然で押し付けがましくないもの。
 
 記事タイトル: ${title}
 想定読者: ${idea.targetReader}
 
 CTAのテキストのみ返してください。`;
-
-    const cta = await llm.generate(ctaPrompt, { temperature: 0.5 });
+    const [body, cta] = await Promise.all([
+      llm.generate(prompt, { temperature: 0.7, tier: "standard" }),
+      llm.generate(ctaPrompt, { temperature: 0.5, tier: "fast" }),
+    ]);
 
     const id = randomUUID();
     const now = new Date().toISOString();
@@ -352,7 +359,10 @@ ${feedback}
 
 改善版の本文のみをマークダウンで返してください。`;
 
-    const body = await llm.generate(prompt, { temperature: 0.6 });
+    const body = await llm.generate(prompt, {
+      temperature: 0.6,
+      tier: "standard",
+    });
 
     const id = randomUUID();
     const now = new Date().toISOString();

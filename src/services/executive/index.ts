@@ -1,14 +1,12 @@
-import { randomUUID } from "node:crypto";
-import { and, desc, eq, isNull, lte } from "drizzle-orm";
+﻿import { randomUUID } from "node:crypto";
+import { desc, eq } from "drizzle-orm";
+import type { LlmClient } from "../../adapters/llm/index.js";
+import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import {
-  contentSlots,
   departmentRuns,
   executiveCycles,
-  humanInputs,
   improvementInsights,
-  notePostResults,
-  replyDecisions,
   strategyStates,
   threadPostDrafts,
   threadPostResults,
@@ -17,6 +15,7 @@ import {
 import {
   type DepartmentDirective,
   type DepartmentName,
+  type DepartmentReport,
   type FunnelStage,
   type HeartbeatObjective,
   resolveDepartmentName,
@@ -25,6 +24,7 @@ import type {
   ActionType,
   ScheduledAction,
 } from "../content-scheduler/index.js";
+import { parseJsonObject } from "../../utils/llm-json.js";
 
 export interface StrategyStateSnapshot {
   objective: HeartbeatObjective;
@@ -48,10 +48,16 @@ export interface HeartbeatCyclePlan {
   skippedActions: Array<{ action: ScheduledAction; reason: string }>;
   directives: DepartmentDirective[];
   strategy: StrategyStateSnapshot;
+  llmReasoning?: string;
+  departmentInstructions?: Record<string, string>;
 }
 
 export interface ExecutiveService {
-  beginHeartbeatCycle(actions: ScheduledAction[]): Promise<HeartbeatCyclePlan>;
+  beginHeartbeatCycle(
+    reports: DepartmentReport[],
+    candidateActions: ScheduledAction[],
+    llm: LlmClient,
+  ): Promise<HeartbeatCyclePlan>;
   resolveDepartment(actionType: ActionType): DepartmentName;
   recordDepartmentRun(params: {
     cycleId: string;
@@ -70,189 +76,95 @@ export interface ExecutiveService {
 
 const STRATEGY_STATE_KEY = "heartbeat:global";
 
-const MAX_ACTIONS_PER_CYCLE: Record<HeartbeatObjective, number> = {
-  directive_assimilation: 2,
-  engagement_compounding: 2,
-  funnel_expansion: 3,
-};
-
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
 }
 
-type PlannedAction = {
-  action: ScheduledAction;
-  index: number;
-};
+interface LlmExecutiveDecision {
+  objective: unknown;
+  funnelStage: unknown;
+  approvedActionTypes: unknown;
+  reasoning: unknown;
+  departmentInstructions: unknown;
+}
 
-type ActionSelectionResult = {
-  approvedActions: ScheduledAction[];
-  skippedActions: Array<{ action: ScheduledAction; reason: string }>;
-};
+function isHeartbeatObjective(v: unknown): v is HeartbeatObjective {
+  return (
+    v === "directive_assimilation" ||
+    v === "funnel_expansion" ||
+    v === "engagement_compounding"
+  );
+}
+
+function isFunnelStage(v: unknown): v is FunnelStage {
+  return (
+    v === "bootstrap" ||
+    v === "distribution" ||
+    v === "conversion" ||
+    v === "optimization"
+  );
+}
 
 export class ExecutiveServiceImpl implements ExecutiveService {
-  private selectActionPlan(
-    actions: ScheduledAction[],
-    strategy: StrategyStateSnapshot,
-  ): ActionSelectionResult {
-    const plannedActions = actions
-      .map((action, index) => ({ action, index }))
-      .sort((left, right) => {
-        if (left.action.priority !== right.action.priority) {
-          return left.action.priority - right.action.priority;
-        }
-        return left.index - right.index;
-      });
-    const approved = new Set<number>();
-    const skipped = new Map<number, string>();
-    const maxActions = MAX_ACTIONS_PER_CYCLE[strategy.objective];
+  private buildExecutivePrompt(
+    reports: DepartmentReport[],
+    candidateActions: ScheduledAction[],
+  ): string {
+    const reportSection = reports
+      .map(
+        (r) =>
+          `### ${r.department}部\n- 状況: ${r.summary}\n- 数値: ${JSON.stringify(r.metrics)}\n- 推奨: ${r.recommendation}\n- 最終実行: ${r.lastExecutedAt ?? "なし"}`,
+      )
+      .join("\n\n");
 
-    const findFirst = (types: ActionType[]): PlannedAction | undefined =>
-      plannedActions.find(
-        (planned) =>
-          !approved.has(planned.index) &&
-          !skipped.has(planned.index) &&
-          types.includes(planned.action.type),
-      );
+    const actionSection = candidateActions
+      .map(
+        (a, i) =>
+          `${i + 1}. type="${a.type}" priority=${a.priority} reason="${a.reason}"`,
+      )
+      .join("\n");
 
-    const approve = (planned: PlannedAction | undefined): boolean => {
-      if (!planned || approved.size >= maxActions) {
-        return false;
-      }
-      approved.add(planned.index);
-      return true;
-    };
+    return `あなたはThreadsOS運用の最高責任者（エグゼクティブ）です。
+各部署から上がってきた状況レポートと、実行候補アクションを見て、
+今回のハートビートで何を実行すべきかを判断してください。
 
-    const skipMatching = (types: ActionType[], reason: string): void => {
-      for (const planned of plannedActions) {
-        if (
-          approved.has(planned.index) ||
-          skipped.has(planned.index) ||
-          !types.includes(planned.action.type)
-        ) {
-          continue;
-        }
-        skipped.set(planned.index, reason);
-      }
-    };
+## 判断原則
+- 動く必要がない部署は動かさない（コスト削減）
+- 部署の推奨を尊重しつつ、全体最適を考える
+- note実績ゼロならnote生成を最優先（ファネル構築）
+- 人間入力があれば最優先で処理
+- 1回のハートビートで最大3アクションまで
+- 各部署のデータに基づいて根拠ある判断をする
 
-    const chooseGrowthPrimary = (): PlannedAction | undefined => {
-      if (strategy.dueNoteSlots > 0 || strategy.latestNoteCount === 0) {
-        return findFirst(["generate_note"]);
-      }
+## objectiveの選択肢
+- "directive_assimilation": 人間の入力・指示を優先処理
+- "funnel_expansion": コンテンツ生成・ファネル拡大を優先
+- "engagement_compounding": エンゲージメント・コミュニティ対応を優先
 
-      if (strategy.dueThreadSlots > 0) {
-        return findFirst(["generate_and_post"]);
-      }
+## funnelStageの選択肢
+- "bootstrap": 実績ゼロ、最初のコンテンツ作成が必要
+- "distribution": コンテンツ配信フェーズ
+- "conversion": 収益化・コンバージョンフェーズ
+- "optimization": 最適化フェーズ
 
-      return findFirst([
-        "generate_note",
-        "generate_and_post",
-        "research_threads",
-        "research_note",
-      ]);
-    };
+## 各部署の状況レポート
 
-    approve(findFirst(["process_human_inputs"]));
+${reportSection}
 
-    switch (strategy.objective) {
-      case "directive_assimilation": {
-        approve(findFirst(["reply_safe"]));
-        skipMatching(
-          [
-            "generate_note",
-            "generate_and_post",
-            "research_threads",
-            "research_note",
-            "fetch_engagement",
-            "optimize_schedule",
-            "weekly_retro",
-          ],
-          "executive deferred while assimilating pending directives",
-        );
-        break;
-      }
-      case "engagement_compounding": {
-        approve(findFirst(["fetch_engagement"]));
-        approve(findFirst(["reply_safe"]));
-        skipMatching(
-          [
-            "generate_note",
-            "generate_and_post",
-            "research_threads",
-            "research_note",
-            "optimize_schedule",
-            "weekly_retro",
-          ],
-          "executive deferred to prioritize engagement follow-up",
-        );
-        break;
-      }
-      case "funnel_expansion": {
-        const primary = chooseGrowthPrimary();
-        const approvedPrimary = approve(primary);
+## 実行候補アクション
 
-        if (approvedPrimary) {
-          if (primary?.action.type === "generate_note") {
-            skipMatching(
-              ["generate_and_post"],
-              "executive deferred threads generation in favor of note expansion",
-            );
-          }
-          if (primary?.action.type === "generate_and_post") {
-            skipMatching(
-              ["generate_note"],
-              "executive deferred note generation in favor of threads expansion",
-            );
-          }
-          skipMatching(
-            ["research_threads", "research_note"],
-            "executive deferred research because a primary growth action is already scheduled",
-          );
-        } else {
-          approve(findFirst(["research_threads", "research_note"]));
-        }
+${actionSection}
 
-        approve(findFirst(["reply_safe"]));
-        skipMatching(
-          ["fetch_engagement", "optimize_schedule", "weekly_retro"],
-          "executive deferred non-growth work to keep the heartbeat focused",
-        );
-        break;
-      }
-    }
-
-    if (approved.size < maxActions) {
-      approve(findFirst(["weekly_retro", "optimize_schedule"]));
-    }
-
-    if (approved.size < maxActions) {
-      approve(findFirst(["notify"]));
-    }
-
-    for (const planned of plannedActions) {
-      if (approved.has(planned.index) || skipped.has(planned.index)) {
-        continue;
-      }
-      skipped.set(
-        planned.index,
-        "executive deferred to keep the heartbeat within budget",
-      );
-    }
-
-    return {
-      approvedActions: plannedActions
-        .filter((planned) => approved.has(planned.index))
-        .map((planned) => planned.action),
-      skippedActions: plannedActions
-        .filter((planned) => skipped.has(planned.index))
-        .map((planned) => ({
-          action: planned.action,
-          reason:
-            skipped.get(planned.index) ??
-            "executive deferred to keep the heartbeat within budget",
-        })),
-    };
+## 回答形式（JSONのみ）
+{
+  "objective": "directive_assimilation" | "funnel_expansion" | "engagement_compounding",
+  "funnelStage": "bootstrap" | "distribution" | "conversion" | "optimization",
+  "approvedActionTypes": ["action_type_1", "action_type_2"],
+  "reasoning": "判断理由を1-2文で",
+  "departmentInstructions": {
+    "department_name": "この部署への具体的指示"
+  }
+}`;
   }
 
   private collectPriorityTopics(): string[] {
@@ -283,9 +195,7 @@ export class ExecutiveServiceImpl implements ExecutiveService {
     for (const result of recentResults) {
       const topicId = draftTopicMap.get(result.draftId);
       const topicName = topicId ? topicMap.get(topicId) : null;
-      if (!topicName) {
-        continue;
-      }
+      if (!topicName) continue;
 
       const current = scoredTopics.get(topicName) ?? 0;
       const nextScore =
@@ -299,9 +209,7 @@ export class ExecutiveServiceImpl implements ExecutiveService {
       .sort((left, right) => right[1] - left[1])
       .map(([topicName]) => topicName);
 
-    if (ranked.length >= 3) {
-      return ranked.slice(0, 3);
-    }
+    if (ranked.length >= 3) return ranked.slice(0, 3);
 
     const fallback = db
       .select()
@@ -326,41 +234,6 @@ export class ExecutiveServiceImpl implements ExecutiveService {
       .slice(0, 3);
   }
 
-  private deriveObjective(context: {
-    pendingHumanInputs: number;
-    dueNoteSlots: number;
-    latestNoteCount: number;
-    pendingReplies: number;
-  }): HeartbeatObjective {
-    if (context.pendingHumanInputs > 0) {
-      return "directive_assimilation";
-    }
-    if (context.dueNoteSlots > 0 || context.latestNoteCount === 0) {
-      return "funnel_expansion";
-    }
-    if (context.pendingReplies > 0) {
-      return "engagement_compounding";
-    }
-    return "funnel_expansion";
-  }
-
-  private deriveFunnelStage(context: {
-    latestNoteCount: number;
-    dueNoteSlots: number;
-    dueThreadSlots: number;
-  }): FunnelStage {
-    if (context.latestNoteCount === 0) {
-      return "bootstrap";
-    }
-    if (context.dueNoteSlots > 0) {
-      return "conversion";
-    }
-    if (context.dueThreadSlots > 0) {
-      return "distribution";
-    }
-    return "optimization";
-  }
-
   private buildDirectives(actions: ScheduledAction[]): DepartmentDirective[] {
     const grouped = new Map<DepartmentName, ActionType[]>();
     for (const action of actions) {
@@ -377,92 +250,164 @@ export class ExecutiveServiceImpl implements ExecutiveService {
     }));
   }
 
-  async beginHeartbeatCycle(
-    actions: ScheduledAction[],
-  ): Promise<HeartbeatCyclePlan> {
-    const now = new Date().toISOString();
-    const dueThreadSlots = db
-      .select()
-      .from(contentSlots)
-      .where(
-        and(
-          eq(contentSlots.channel, "threads"),
-          eq(contentSlots.status, "pending"),
-          lte(contentSlots.scheduledAt, now),
-        ),
-      )
-      .all().length;
-    const dueNoteSlots = db
-      .select()
-      .from(contentSlots)
-      .where(
-        and(
-          eq(contentSlots.channel, "note"),
-          eq(contentSlots.status, "pending"),
-          lte(contentSlots.scheduledAt, now),
-        ),
-      )
-      .all().length;
-    const pendingHumanInputs = db
-      .select()
-      .from(humanInputs)
-      .where(eq(humanInputs.processed, 0))
-      .all().length;
-    const pendingReplies = db
-      .select()
-      .from(replyDecisions)
-      .where(
-        and(
-          eq(replyDecisions.decision, "safe_auto_reply"),
-          isNull(replyDecisions.sentAt),
-        ),
-      )
-      .all().length;
-    const latestNoteCount = db
-      .select()
-      .from(notePostResults)
-      .orderBy(desc(notePostResults.publishedAt))
-      .limit(20)
-      .all().length;
-
-    const baseStrategy: StrategyStateSnapshot = {
-      objective: this.deriveObjective({
-        pendingHumanInputs,
-        dueNoteSlots,
-        latestNoteCount,
-        pendingReplies,
-      }),
-      funnelStage: this.deriveFunnelStage({
-        latestNoteCount,
-        dueNoteSlots,
-        dueThreadSlots,
-      }),
-      priorityTopics: this.collectPriorityTopics(),
-      pendingHumanInputs,
-      dueThreadSlots,
-      dueNoteSlots,
-      pendingReplies,
-      latestNoteCount,
-      insightFocus: this.collectInsightFocus(),
-      activeActionTypes: [],
-    };
-    const { approvedActions, skippedActions } = this.selectActionPlan(
-      actions,
-      baseStrategy,
-    );
-    const strategy: StrategyStateSnapshot = {
-      ...baseStrategy,
-      activeActionTypes: unique(approvedActions.map((action) => action.type)),
-    };
+  private buildFallbackPlan(
+    candidateActions: ScheduledAction[],
+  ): HeartbeatCyclePlan {
     const cycleId = randomUUID();
+    const limited = candidateActions.slice(0, 3);
+    const fallbackReason =
+      "LLM response parse failed; fallback: up to 3 candidate actions approved";
+    const skipped = candidateActions.slice(3).map((a) => ({
+      action: a,
+      reason: fallbackReason,
+    }));
+    return {
+      cycleId,
+      strategyKey: STRATEGY_STATE_KEY,
+      objective: "funnel_expansion",
+      funnelStage: "bootstrap",
+      approvedActions: limited,
+      skippedActions: skipped,
+      directives: this.buildDirectives(limited),
+      strategy: {
+        objective: "funnel_expansion",
+        funnelStage: "bootstrap",
+        priorityTopics: [],
+        pendingHumanInputs: 0,
+        dueThreadSlots: 0,
+        dueNoteSlots: 0,
+        pendingReplies: 0,
+        latestNoteCount: 0,
+        insightFocus: [],
+        activeActionTypes: limited.map((a) => a.type),
+      },
+      llmReasoning: fallbackReason,
+      departmentInstructions: {},
+    };
+  }
+
+  async beginHeartbeatCycle(
+    reports: DepartmentReport[],
+    candidateActions: ScheduledAction[],
+    llm: LlmClient,
+  ): Promise<HeartbeatCyclePlan> {
+    const prompt = this.buildExecutivePrompt(reports, candidateActions);
+
+    const raw = await llm.generate(prompt, {
+      temperature: 0.3,
+      systemPrompt:
+        "You are an executive decision maker for an autonomous social media system. Return ONLY valid JSON.",
+      tier: "standard",
+    });
+
+    const decision = parseJsonObject<LlmExecutiveDecision>(raw);
+
+    if (!decision) {
+      logger.warn(
+        { raw },
+        "Executive LLM response parse failed, falling back to approving all candidates",
+      );
+      const fallback = this.buildFallbackPlan(candidateActions);
+      const fbNow = new Date().toISOString();
+      db.insert(strategyStates)
+        .values({
+          key: STRATEGY_STATE_KEY,
+          scope: "heartbeat",
+          stateJson: JSON.stringify(fallback.strategy),
+          summary: `${fallback.strategy.objective}:${fallback.strategy.funnelStage} — ${fallback.llmReasoning ?? ""}`,
+          createdAt: fbNow,
+          updatedAt: fbNow,
+        })
+        .onConflictDoUpdate({
+          target: strategyStates.key,
+          set: {
+            scope: "heartbeat",
+            stateJson: JSON.stringify(fallback.strategy),
+            summary: `${fallback.strategy.objective}:${fallback.strategy.funnelStage} — ${fallback.llmReasoning ?? ""}`,
+            updatedAt: fbNow,
+          },
+        })
+        .run();
+      db.insert(executiveCycles)
+        .values({
+          id: fallback.cycleId,
+          objective: fallback.objective,
+          funnelStage: fallback.funnelStage,
+          strategyKey: STRATEGY_STATE_KEY,
+          status: "running",
+          decisionJson: JSON.stringify({
+            fallbackReason: fallback.llmReasoning,
+            approvedActions: fallback.approvedActions,
+            skippedActions: fallback.skippedActions,
+          }),
+          summary: null,
+          startedAt: fbNow,
+          completedAt: null,
+          createdAt: fbNow,
+        })
+        .run();
+      return fallback;
+    }
+
+    const rawApproved = Array.isArray(decision.approvedActionTypes)
+      ? (decision.approvedActionTypes as string[])
+      : [];
+    const approvedActions = candidateActions.filter((a) =>
+      rawApproved.includes(a.type),
+    );
+    const rawReasoning =
+      typeof decision.reasoning === "string" ? decision.reasoning : "";
+    const rawInstructions =
+      decision.departmentInstructions !== null &&
+      typeof decision.departmentInstructions === "object" &&
+      !Array.isArray(decision.departmentInstructions)
+        ? (decision.departmentInstructions as Record<string, string>)
+        : {};
+    const skippedActions = candidateActions
+      .filter((a) => !rawApproved.includes(a.type))
+      .map((a) => ({
+        action: a,
+        reason: `Executive LLM deferred: ${rawReasoning}`,
+      }));
+
+    const cycleId = randomUUID();
+    const now = new Date().toISOString();
     const directives = this.buildDirectives(approvedActions);
+
+    const objective: HeartbeatObjective = isHeartbeatObjective(decision.objective)
+      ? decision.objective
+      : "funnel_expansion";
+    const funnelStage: FunnelStage = isFunnelStage(decision.funnelStage)
+      ? decision.funnelStage
+      : "bootstrap";
+
+    const strategy: StrategyStateSnapshot = {
+      objective,
+      funnelStage,
+      priorityTopics: this.collectPriorityTopics(),
+      pendingHumanInputs:
+        reports.find((r) => r.department === "command")?.metrics
+          .pendingInputs ?? 0,
+      dueThreadSlots:
+        reports.find((r) => r.department === "threads")?.metrics.dueSlots ?? 0,
+      dueNoteSlots:
+        reports.find((r) => r.department === "note")?.metrics.dueNoteSlots ?? 0,
+      pendingReplies:
+        reports.find((r) => r.department === "community")?.metrics
+          .pendingReplies ?? 0,
+      latestNoteCount:
+        reports.find((r) => r.department === "note")?.metrics.publishedNotes ??
+        0,
+      insightFocus: this.collectInsightFocus(),
+      activeActionTypes: unique(approvedActions.map((a) => a.type)),
+    };
 
     db.insert(strategyStates)
       .values({
         key: STRATEGY_STATE_KEY,
         scope: "heartbeat",
         stateJson: JSON.stringify(strategy),
-        summary: `${strategy.objective}:${strategy.funnelStage}`,
+        summary: `${strategy.objective}:${strategy.funnelStage} — ${rawReasoning}`,
         createdAt: now,
         updatedAt: now,
       })
@@ -471,7 +416,7 @@ export class ExecutiveServiceImpl implements ExecutiveService {
         set: {
           scope: "heartbeat",
           stateJson: JSON.stringify(strategy),
-          summary: `${strategy.objective}:${strategy.funnelStage}`,
+          summary: `${strategy.objective}:${strategy.funnelStage} — ${rawReasoning}`,
           updatedAt: now,
         },
       })
@@ -485,8 +430,11 @@ export class ExecutiveServiceImpl implements ExecutiveService {
         strategyKey: STRATEGY_STATE_KEY,
         status: "running",
         decisionJson: JSON.stringify({
+          llmReasoning: rawReasoning,
+          departmentInstructions: rawInstructions,
+          departmentReports: reports,
           directives,
-          candidateActions: actions,
+          candidateActions,
           approvedActions,
           skippedActions,
         }),
@@ -500,12 +448,14 @@ export class ExecutiveServiceImpl implements ExecutiveService {
     return {
       cycleId,
       strategyKey: STRATEGY_STATE_KEY,
-      objective: strategy.objective,
-      funnelStage: strategy.funnelStage,
+      objective,
+      funnelStage,
       approvedActions,
       skippedActions,
       directives,
       strategy,
+      llmReasoning: rawReasoning,
+      departmentInstructions: rawInstructions,
     };
   }
 

@@ -160,7 +160,10 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
 }`;
 
     try {
-      const raw = await llm.generate(prompt, { temperature: 0.3 });
+      const raw = await llm.generate(prompt, {
+        temperature: 0.3,
+        tier: "premium",
+      });
       const parsed =
         parseJsonObject<Partial<typeof DEFAULT_FREQUENCY_RECOMMENDATION>>(raw);
       if (!parsed) {

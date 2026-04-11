@@ -1,0 +1,27 @@
+ThreadsOSのPhase 2土台整備を実装せよ。以下のDBテーブルとサービスを追加する。
+
+1. 新規DBテーブル - src/db/schema.tsに追加 + src/db/bootstrap.tsにCREATE TABLE追加
+
+memory_entries: id TEXT PK, layer TEXT NOT NULL, scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, version INTEGER DEFAULT 1, expires_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE INDEX on layer+scope+key
+
+agent_states: id TEXT PK, name TEXT NOT NULL, department TEXT NOT NULL, role TEXT NOT NULL, status TEXT DEFAULT idle, current_task TEXT, last_completed_task TEXT, budget_used_tokens INTEGER DEFAULT 0, budget_used_calls INTEGER DEFAULT 0, last_active_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+
+proposals: id TEXT PK, agent_id TEXT NOT NULL, department TEXT NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, reason TEXT NOT NULL, evidence TEXT NOT NULL, expected_effect TEXT NOT NULL, risk TEXT, priority TEXT DEFAULT medium, status TEXT DEFAULT pending, reviewer_note TEXT, reviewed_at TEXT, executed_at TEXT, created_at TEXT NOT NULL
+
+budget_tracking: id TEXT PK, scope TEXT NOT NULL, period TEXT NOT NULL, period_key TEXT NOT NULL, tokens_used INTEGER DEFAULT 0, calls_used INTEGER DEFAULT 0, tokens_limit INTEGER NOT NULL, calls_limit INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+
+kpi_snapshots: id TEXT PK, channel TEXT NOT NULL, metric_name TEXT NOT NULL, metric_value REAL NOT NULL, period_type TEXT NOT NULL, period_key TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE INDEX on channel+metric_name+period_type+period_key
+
+department_summaries: id TEXT PK, department TEXT NOT NULL, summary_type TEXT NOT NULL, content TEXT NOT NULL, period_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE INDEX on department+summary_type+period_key
+
+2. 新規サービス
+
+src/services/memory/index.ts - MemoryService: get/set/delete/listByLayer/promote/expire
+
+src/services/budget/index.ts - BudgetService: canSpend/spend/getRemainingBudget/resetPeriod
+
+src/services/diff-collector/index.ts - DiffCollectorService: collectSinceLastHeartbeat
+
+3. テスト: tests/memory.test.ts, tests/budget.test.ts, tests/diff-collector.test.ts
+
+制約: 既存テーブル変更禁止。Drizzle ORM形式。interface+Implパターン。

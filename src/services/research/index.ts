@@ -10,7 +10,9 @@ import { db } from "../../db/index.js";
 import { competitorSnapshots, researchItems } from "../../db/schema.js";
 import type { ResearchItem } from "../../domain/threads/index.js";
 import { parseJsonArray } from "../../utils/llm-json.js";
+import { createMemoryService } from "../memory/index.js";
 import { ProfileContextServiceImpl } from "../profile-context/index.js";
+import { createRetrievalService } from "../retrieval/index.js";
 
 export interface ResearchService {
   researchTopic(
@@ -31,6 +33,8 @@ export interface ResearchService {
 export class ResearchServiceImpl implements ResearchService {
   private profileService = new ProfileContextServiceImpl();
   private webSearchClient: WebSearchClient;
+  private retrievalService = createRetrievalService();
+  private memoryService = createMemoryService();
 
   constructor(webSearchClient?: WebSearchClient) {
     this.webSearchClient = webSearchClient ?? new JinaSearchClient();
@@ -44,6 +48,13 @@ export class ResearchServiceImpl implements ResearchService {
     const profileText = this.profileService.formatForPrompt();
     const profileSection = profileText
       ? `\n## 運用者プロフィール\n${profileText}\n(このジャンル・トーンに特化したリサーチを行ってください。)`
+      : "";
+    const retrievalContext = this.retrievalService.buildContext(topicName, {
+      scope: "research",
+      limit: 6,
+    });
+    const retrievalSection = retrievalContext
+      ? `\n## 既存メモリ/RAG参照\n${retrievalContext}\n`
       : "";
 
     const query = `${topicName} Threads 投稿 コツ`;
@@ -71,7 +82,7 @@ export class ResearchServiceImpl implements ResearchService {
 
     const prompt = `以下のトピックについて、Threads投稿とnote記事に使えるリサーチを行ってください。
 ${searchInstruction}
-${profileSection}${webResultsStr}
+${profileSection}${retrievalSection}${webResultsStr}
 ## トピック
 ${topicName}
 
@@ -87,7 +98,10 @@ ${topicName}
 
 5〜8件の有用なリサーチ結果を返してください。`;
 
-    const raw = await llm.generate(prompt, { temperature: 0.5 });
+    const raw = await llm.generate(prompt, {
+      temperature: 0.5,
+      tier: "standard",
+    });
 
     let parsed: Array<{
       source: string;
@@ -140,6 +154,30 @@ ${topicName}
         evidenceType: p.evidenceType as ResearchItem["evidenceType"],
         confidence: p.confidence as ResearchItem["confidence"],
       });
+    }
+
+    const summaryForMemory = items
+      .slice(0, 5)
+      .map(
+        (item) => `- [${item.evidenceType}/${item.confidence}] ${item.content}`,
+      )
+      .join("\n");
+    if (summaryForMemory) {
+      this.memoryService.set(
+        "department_summary",
+        "research",
+        `topic:${topicId}`,
+        summaryForMemory,
+      );
+      this.memoryService.set(
+        "working_memory",
+        "research",
+        `topic:${topicId}:latest`,
+        summaryForMemory,
+        {
+          expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
+        },
+      );
     }
 
     logger.info({ topicId, count: items.length }, "Research completed");

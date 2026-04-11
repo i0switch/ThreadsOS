@@ -18,6 +18,10 @@ describe("DepartmentExecutionService", () => {
         },
       ]),
     } as const;
+    const runtimeState = {
+      startAgent: vi.fn(),
+      finishAgent: vi.fn(),
+    } as const;
 
     const service = new DepartmentExecutionServiceImpl({
       dryRun: false,
@@ -36,6 +40,7 @@ describe("DepartmentExecutionService", () => {
       notification: {} as never,
       runTrackedSubJob: vi.fn() as never,
       createNoteApiClient: vi.fn() as never,
+      runtimeState: runtimeState as never,
     });
 
     const result = await service.execute({
@@ -48,6 +53,10 @@ describe("DepartmentExecutionService", () => {
     expect(result.summary).toContain("Generated 2 drafts");
     expect(result.summary).toContain("Auto-published 1 threads posts");
     expect(orchestration.runDailyThreadsPlan).toHaveBeenCalledTimes(1);
+    expect(runtimeState.startAgent).toHaveBeenCalledWith(
+      "threads-post-generator",
+      expect.any(String),
+    );
     expect(scheduler.syncThreadSlotsFromAuditedDrafts).toHaveBeenCalledWith(3);
     expect(autoPublisher.publishApprovedThreadDrafts).toHaveBeenCalledTimes(1);
   });
@@ -58,6 +67,10 @@ describe("DepartmentExecutionService", () => {
     );
     const orchestration = {
       runNoteResearch: vi.fn(async () => "Researched note competitors"),
+    } as const;
+    const runtimeState = {
+      startAgent: vi.fn(),
+      finishAgent: vi.fn(),
     } as const;
 
     const service = new DepartmentExecutionServiceImpl({
@@ -75,6 +88,7 @@ describe("DepartmentExecutionService", () => {
       notification: {} as never,
       runTrackedSubJob: runTrackedSubJob as never,
       createNoteApiClient: vi.fn() as never,
+      runtimeState: runtimeState as never,
     });
 
     const result = await service.execute({
@@ -85,6 +99,10 @@ describe("DepartmentExecutionService", () => {
 
     expect(result.department).toBe("research");
     expect(result.summary).toBe("Researched note competitors");
+    expect(runtimeState.startAgent).toHaveBeenCalledWith(
+      "note-competitor-researcher",
+      expect.any(String),
+    );
     expect(runTrackedSubJob).toHaveBeenCalledWith(
       "note-competitor-research",
       expect.any(Function),

@@ -59,10 +59,16 @@ CREATE TABLE IF NOT EXISTS channel_performance_snapshots (
 CREATE TABLE IF NOT EXISTS note_post_results (
   id TEXT PRIMARY KEY NOT NULL,
   draft_id TEXT NOT NULL,
+  title TEXT,
   note_url TEXT,
+  price_yen INTEGER,
   views INTEGER NOT NULL DEFAULT 0,
   likes INTEGER NOT NULL DEFAULT 0,
   comments_count INTEGER NOT NULL DEFAULT 0,
+  purchases_count INTEGER NOT NULL DEFAULT 0,
+  revenue_yen INTEGER NOT NULL DEFAULT 0,
+  conversion_rate REAL NOT NULL DEFAULT 0,
+  traffic_source TEXT,
   published_at TEXT NOT NULL,
   created_at TEXT NOT NULL
 );

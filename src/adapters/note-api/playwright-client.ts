@@ -10,12 +10,12 @@
 
 import fs from "node:fs/promises";
 import {
-  chromium,
-  request as playwrightRequest,
   type APIRequestContext,
   type Browser,
   type BrowserContext,
+  chromium,
   type Page,
+  request as playwrightRequest,
 } from "playwright";
 import { logger } from "../../app/logger.js";
 import {
@@ -108,6 +108,11 @@ class NoteInnerApiClient {
     views: number;
     likes: number;
     comments: number;
+    priceYen?: number;
+    purchasesCount?: number;
+    revenueYen?: number;
+    conversionRate?: number;
+    trafficSource?: string;
     publishedAt?: string;
   }> {
     // Try stats endpoint first, fall back to note detail
@@ -128,11 +133,36 @@ class NoteInnerApiClient {
           : data;
 
       return {
-        views: Number(source.readCount ?? source.views ?? source.viewCount ?? 0),
+        views: Number(
+          source.readCount ?? source.views ?? source.viewCount ?? 0,
+        ),
         likes: Number(source.likeCount ?? source.likes ?? 0),
         comments: Number(
           source.commentCount ?? source.comments ?? source.commentsCount ?? 0,
         ),
+        priceYen: source.price !== undefined ? Number(source.price) : undefined,
+        purchasesCount:
+          source.purchaseCount !== undefined
+            ? Number(source.purchaseCount)
+            : source.salesCount !== undefined
+              ? Number(source.salesCount)
+              : undefined,
+        revenueYen:
+          source.revenue !== undefined
+            ? Number(source.revenue)
+            : source.salesAmount !== undefined
+              ? Number(source.salesAmount)
+              : undefined,
+        conversionRate:
+          source.conversionRate !== undefined
+            ? Number(source.conversionRate)
+            : source.cvRate !== undefined
+              ? Number(source.cvRate)
+              : undefined,
+        trafficSource:
+          typeof source.trafficSource === "string"
+            ? source.trafficSource
+            : undefined,
         publishedAt: source.publishAt
           ? String(source.publishAt)
           : source.publishedAt
@@ -141,7 +171,10 @@ class NoteInnerApiClient {
       };
     }
 
-    logger.warn({ noteId }, "[PLAYWRIGHT] All stats endpoints failed, returning zeros");
+    logger.warn(
+      { noteId },
+      "[PLAYWRIGHT] All stats endpoints failed, returning zeros",
+    );
     return { views: 0, likes: 0, comments: 0 };
   }
 
@@ -153,6 +186,11 @@ class NoteInnerApiClient {
       views: number;
       likes: number;
       comments?: number;
+      priceYen?: number;
+      purchasesCount?: number;
+      revenueYen?: number;
+      conversionRate?: number;
+      trafficSource?: string;
       publishedAt?: string;
     }>
   > {
@@ -169,10 +207,14 @@ class NoteInnerApiClient {
       const data = (await res.json()) as Record<string, unknown>;
       const rawItems: unknown[] = (() => {
         if (Array.isArray(data.data)) return data.data;
-        if (Array.isArray((data as any).contents)) return (data as any).contents;
-        if (Array.isArray((data as any).notes)) return (data as any).notes;
+        if (Array.isArray(data.contents)) return data.contents;
+        if (Array.isArray(data.notes)) return data.notes;
         // data.data がオブジェクトで中に contents/notes がある場合
-        if (data.data && typeof data.data === "object" && !Array.isArray(data.data)) {
+        if (
+          data.data &&
+          typeof data.data === "object" &&
+          !Array.isArray(data.data)
+        ) {
           const inner = data.data as Record<string, unknown>;
           if (Array.isArray(inner.contents)) return inner.contents;
           if (Array.isArray(inner.notes)) return inner.notes;
@@ -187,6 +229,11 @@ class NoteInnerApiClient {
         views: number;
         likes: number;
         comments?: number;
+        priceYen?: number;
+        purchasesCount?: number;
+        revenueYen?: number;
+        conversionRate?: number;
+        trafficSource?: string;
         publishedAt?: string;
       }> = [];
 
@@ -216,6 +263,30 @@ class NoteInnerApiClient {
               : record.comments !== undefined
                 ? Number(record.comments)
                 : undefined,
+          priceYen:
+            record.price !== undefined ? Number(record.price) : undefined,
+          purchasesCount:
+            record.purchaseCount !== undefined
+              ? Number(record.purchaseCount)
+              : record.salesCount !== undefined
+                ? Number(record.salesCount)
+                : undefined,
+          revenueYen:
+            record.revenue !== undefined
+              ? Number(record.revenue)
+              : record.salesAmount !== undefined
+                ? Number(record.salesAmount)
+                : undefined,
+          conversionRate:
+            record.conversionRate !== undefined
+              ? Number(record.conversionRate)
+              : record.cvRate !== undefined
+                ? Number(record.cvRate)
+                : undefined,
+          trafficSource:
+            typeof record.trafficSource === "string"
+              ? record.trafficSource
+              : undefined,
           publishedAt: record.publishAt
             ? String(record.publishAt)
             : record.publishedAt
@@ -227,7 +298,9 @@ class NoteInnerApiClient {
       return result;
     }
 
-    logger.warn("[PLAYWRIGHT] All article list endpoints failed, returning empty");
+    logger.warn(
+      "[PLAYWRIGHT] All article list endpoints failed, returning empty",
+    );
     return [];
   }
 
@@ -372,7 +445,9 @@ export class PlaywrightNoteClient {
     this.runner = new NotePlaywrightRunner(storageStatePath, headless);
   }
 
-  async publishArticle(options: NotePublishOptions): Promise<NotePublishResult> {
+  async publishArticle(
+    options: NotePublishOptions,
+  ): Promise<NotePublishResult> {
     const {
       title,
       body,
@@ -440,6 +515,11 @@ export class PlaywrightNoteClient {
     views: number;
     likes: number;
     comments: number;
+    priceYen?: number;
+    purchasesCount?: number;
+    revenueYen?: number;
+    conversionRate?: number;
+    trafficSource?: string;
     publishedAt?: string;
   }> {
     return this.runner.run(async (page) => {
@@ -464,6 +544,11 @@ export class PlaywrightNoteClient {
       views: number;
       likes: number;
       comments?: number;
+      priceYen?: number;
+      purchasesCount?: number;
+      revenueYen?: number;
+      conversionRate?: number;
+      trafficSource?: string;
       publishedAt?: string;
     }>
   > {

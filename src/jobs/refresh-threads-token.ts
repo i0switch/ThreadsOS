@@ -13,6 +13,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { atomicWriteTextFile } from "../utils/atomic-file.js";
 import { runJob } from "./runner.js";
 
 const projectRoot = path.resolve(
@@ -33,7 +34,9 @@ type ErrorResponse = {
   error?: { message?: string; type?: string; code?: number };
 };
 
-export async function refreshToken(currentToken: string): Promise<RefreshResponse> {
+export async function refreshToken(
+  currentToken: string,
+): Promise<RefreshResponse> {
   const url = new URL(REFRESH_ENDPOINT);
   url.searchParams.set("grant_type", "th_refresh_token");
   url.searchParams.set("access_token", currentToken);
@@ -76,7 +79,7 @@ export async function updateEnvFile(newToken: string): Promise<void> {
     updated.push(`THREADS_ACCESS_TOKEN=${newToken}`);
   }
 
-  await fs.writeFile(envPath, updated.join("\n"), "utf-8");
+  await atomicWriteTextFile(envPath, `${updated.join("\n")}\n`);
 }
 
 // CLI エントリーポイント（直接実行時のみ）
@@ -85,31 +88,31 @@ const isDirectRun =
   import.meta.url === `file://${process.argv[1]?.replace(/\\/g, "/")}`;
 
 if (isDirectRun) {
-const dryRun = process.argv.includes("--dry-run");
+  const dryRun = process.argv.includes("--dry-run");
 
-runJob({ name: "refresh-threads-token", dryRun }, async (ctx) => {
-  const token = process.env.THREADS_ACCESS_TOKEN;
-  if (!token) {
-    throw new Error("THREADS_ACCESS_TOKEN が設定されていません");
-  }
+  runJob({ name: "refresh-threads-token", dryRun }, async (ctx) => {
+    const token = process.env.THREADS_ACCESS_TOKEN;
+    if (!token) {
+      throw new Error("THREADS_ACCESS_TOKEN が設定されていません");
+    }
 
-  if (ctx.dryRun) {
-    ctx.logger.info("dry-run: トークンリフレッシュをスキップ");
-    return "dry-run: skipped";
-  }
+    if (ctx.dryRun) {
+      ctx.logger.info("dry-run: トークンリフレッシュをスキップ");
+      return "dry-run: skipped";
+    }
 
-  ctx.logger.info("トークンリフレッシュを実行中...");
-  const result = await refreshToken(token);
+    ctx.logger.info("トークンリフレッシュを実行中...");
+    const result = await refreshToken(token);
 
-  const expiresInDays = Math.floor(result.expires_in / 86400);
-  ctx.logger.info(
-    { expiresInDays, tokenType: result.token_type },
-    "新しいトークンを取得",
-  );
+    const expiresInDays = Math.floor(result.expires_in / 86400);
+    ctx.logger.info(
+      { expiresInDays, tokenType: result.token_type },
+      "新しいトークンを取得",
+    );
 
-  await updateEnvFile(result.access_token);
-  ctx.logger.info(".env の THREADS_ACCESS_TOKEN を更新しました");
+    await updateEnvFile(result.access_token);
+    ctx.logger.info(".env の THREADS_ACCESS_TOKEN を更新しました");
 
-  return `トークン更新完了（有効期限: ${expiresInDays}日）`;
-});
+    return `トークン更新完了（有効期限: ${expiresInDays}日）`;
+  });
 }

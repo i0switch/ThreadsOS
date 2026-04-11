@@ -8,6 +8,13 @@ describe("loadEnv", () => {
     delete process.env.PORT;
     delete process.env.NODE_ENV;
     delete process.env.DATABASE_URL;
+    delete process.env.LLM_DEFAULT_TIER;
+    delete process.env.LLM_DIRECT_MODEL_FAST;
+    delete process.env.LLM_DIRECT_MODEL_STANDARD;
+    delete process.env.LLM_DIRECT_MODEL_PREMIUM;
+    delete process.env.LLM_HEARTBEAT_MODEL_FAST;
+    delete process.env.LLM_HEARTBEAT_MODEL_STANDARD;
+    delete process.env.LLM_HEARTBEAT_MODEL_PREMIUM;
   });
 
   it("should return default values when no env vars set", () => {
@@ -19,6 +26,9 @@ describe("loadEnv", () => {
     );
     expect(isAbsolute(env.DATABASE_URL)).toBe(true);
     expect(env.NOTE_MODE).toBe("browser_assisted");
+    expect(env.LLM_DEFAULT_TIER).toBe("standard");
+    expect(env.LLM_DIRECT_MODEL_STANDARD).toBe("claude-sonnet-4-20250514");
+    expect(env.LLM_HEARTBEAT_MODEL_STANDARD).toBe("sonnet");
   });
 
   it("should keep in-memory database urls unchanged", () => {
@@ -45,6 +55,18 @@ describe("loadEnv", () => {
     process.env.PORT = "4000";
     const env = loadEnv();
     expect(env.PORT).toBe(4000);
+  });
+
+  it("should accept tier and tier-specific model overrides", () => {
+    process.env.LLM_DEFAULT_TIER = "premium";
+    process.env.LLM_DIRECT_MODEL_PREMIUM = "custom-direct-premium";
+    process.env.LLM_HEARTBEAT_MODEL_PREMIUM = "custom-heartbeat-premium";
+
+    const env = loadEnv();
+
+    expect(env.LLM_DEFAULT_TIER).toBe("premium");
+    expect(env.LLM_DIRECT_MODEL_PREMIUM).toBe("custom-direct-premium");
+    expect(env.LLM_HEARTBEAT_MODEL_PREMIUM).toBe("custom-heartbeat-premium");
   });
 
   it("should accept valid NODE_ENV values", () => {

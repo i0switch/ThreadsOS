@@ -7,6 +7,7 @@ describe("ThreadsGraphApiClient", () => {
   beforeEach(() => {
     process.env.THREADS_ACCESS_TOKEN = "test-token";
     process.env.THREADS_USER_ID = "test-user";
+    process.env.SCRAPER_RATE_LIMIT_MS = "0";
   });
 
   afterEach(() => {
@@ -56,6 +57,14 @@ describe("ThreadsGraphApiClient", () => {
       replies: 3,
       shares: 0,
       views: 120,
+    });
+    expect(fetchMock).toHaveBeenCalled();
+    const [requestedUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    expect(requestedUrl).toBe(
+      "https://graph.threads.net/v1.0/post-1/insights?metric=views&metric=likes&metric=replies&metric=shares",
+    );
+    expect(requestInit?.headers).toMatchObject({
+      Authorization: "Bearer test-token",
     });
   });
 });

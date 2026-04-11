@@ -11,6 +11,13 @@ export interface JobOptions {
   stuckThresholdMinutes?: number;
 }
 
+function isUniqueConstraintError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.toLowerCase().includes("unique constraint failed")
+  );
+}
+
 export async function runJob(
   options: JobOptions,
   execute: (ctx: { dryRun: boolean; logger: typeof logger }) => Promise<string>,
@@ -48,40 +55,28 @@ export async function runJob(
     );
   }
 
-  // 二重起動防止
-  const running = db
-    .select()
-    .from(scheduledJobRuns)
-    .where(
-      and(
-        eq(scheduledJobRuns.jobName, name),
-        eq(scheduledJobRuns.status, "running"),
-      ),
-    )
-    .get();
-
-  if (running) {
-    jobLogger.warn(
-      { existingRunId: running.id },
-      "Job already running, skipping",
-    );
-    return;
-  }
-
   jobLogger.info("Job started");
 
   const startedAt = new Date().toISOString();
 
-  db.insert(scheduledJobRuns)
-    .values({
-      id: runId,
-      jobName: name,
-      status: "running",
-      startedAt,
-      createdAt: startedAt,
-      dryRun: dryRun ? 1 : 0,
-    })
-    .run();
+  try {
+    db.insert(scheduledJobRuns)
+      .values({
+        id: runId,
+        jobName: name,
+        status: "running",
+        startedAt,
+        createdAt: startedAt,
+        dryRun: dryRun ? 1 : 0,
+      })
+      .run();
+  } catch (error) {
+    if (isUniqueConstraintError(error)) {
+      jobLogger.warn("Job already running, skipping");
+      return;
+    }
+    throw error;
+  }
 
   try {
     const summary = await execute({ dryRun, logger: jobLogger });

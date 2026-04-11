@@ -71,7 +71,10 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
   "score": 0-10
 }`;
 
-    const raw = await llm.generate(prompt, { temperature: 0.3 });
+    const raw = await llm.generate(prompt, {
+      temperature: 0.3,
+      tier: "premium",
+    });
 
     let parsed: {
       verdict: string;

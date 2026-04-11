@@ -32,30 +32,31 @@ async function main(): Promise<void> {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
   });
-  const page = await context.newPage();
 
-  await page.goto("https://note.com/login", { waitUntil: "domcontentloaded" });
+  try {
+    const page = await context.newPage();
+    await page.goto("https://note.com/login", {
+      waitUntil: "domcontentloaded",
+    });
 
-  // ログイン成功を検知（ログインページから離れる or ダッシュボードに遷移）
-  console.log("⏳ ログイン待機中...");
-  await page.waitForURL((url) => !url.toString().includes("/login"), {
-    timeout: 300_000, // 5分待機
-  });
+    console.log("⏳ ログイン待機中...");
+    await page.waitForURL((url) => !url.toString().includes("/login"), {
+      timeout: 300_000,
+    });
 
-  // storageState 保存
-  await context.storageState({ path: storageStatePath });
-  console.log(`\n✓ セッションを保存しました: ${storageStatePath}`);
+    await context.storageState({ path: storageStatePath });
+    console.log(`\n✓ セッションを保存しました: ${storageStatePath}`);
 
-  // セッション検証
-  const api = await context.request;
-  const res = await api.get("https://note.com/api/v2/current_user");
-  if (res.ok()) {
-    const data = (await res.json()) as { data?: { urlname?: string } };
-    console.log(`✓ ログインユーザー: ${data.data?.urlname ?? "(取得失敗)"}`);
+    const api = await context.request;
+    const res = await api.get("https://note.com/api/v2/current_user");
+    if (res.ok()) {
+      const data = (await res.json()) as { data?: { urlname?: string } };
+      console.log(`✓ ログインユーザー: ${data.data?.urlname ?? "(取得失敗)"}`);
+    }
+  } finally {
+    await context.close();
+    await browser.close();
   }
-
-  await context.close();
-  await browser.close();
 
   console.log("\nNOTE_MODE=browser_assisted で自動投稿が使えます。\n");
 }

@@ -1,21 +1,20 @@
-import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { spawnSync } from "node:child_process";
 import { ExternalApiError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 import { loadEnv } from "../../config/env.js";
-import { db } from "../../db/index.js";
-import { llmTaskQueue } from "../../db/schema.js";
 import { parseJsonObject } from "../../utils/llm-json.js";
 
+export type LlmTier = "fast" | "standard" | "premium";
+
+export interface LlmGenerateOptions {
+  maxTokens?: number;
+  temperature?: number;
+  systemPrompt?: string;
+  tier?: LlmTier;
+}
+
 export interface LlmClient {
-  generate(
-    prompt: string,
-    options?: {
-      maxTokens?: number;
-      temperature?: number;
-      systemPrompt?: string;
-    },
-  ): Promise<string>;
+  generate(prompt: string, options?: LlmGenerateOptions): Promise<string>;
   audit(
     content: string,
     criteria: string[],
@@ -28,9 +27,26 @@ export interface LlmClient {
   }>;
 }
 
+function resolveLlmTier(requestedTier?: LlmTier): LlmTier {
+  return requestedTier ?? loadEnv().LLM_DEFAULT_TIER;
+}
+
+function resolveDirectModelForTier(tier: LlmTier): string {
+  const env = loadEnv();
+  switch (tier) {
+    case "fast":
+      return env.LLM_DIRECT_MODEL_FAST;
+    case "premium":
+      return env.LLM_DIRECT_MODEL_PREMIUM;
+    default:
+      return env.LLM_DIRECT_MODEL_STANDARD;
+  }
+}
+
 export class ClaudeLlmClient implements LlmClient {
   private apiKey: string;
   private baseUrl = "https://api.anthropic.com/v1/messages";
+  private timeoutMs = 60_000;
 
   constructor() {
     const env = loadEnv();
@@ -39,18 +55,23 @@ export class ClaudeLlmClient implements LlmClient {
 
   async generate(
     prompt: string,
-    options?: {
-      maxTokens?: number;
-      temperature?: number;
-      systemPrompt?: string;
-    },
+    options?: LlmGenerateOptions,
   ): Promise<string> {
-    const { maxTokens = 4096, temperature = 0.7, systemPrompt } = options ?? {};
+    const {
+      maxTokens = 4096,
+      temperature = 0.7,
+      systemPrompt,
+      tier,
+    } = options ?? {};
+    const resolvedTier = resolveLlmTier(tier);
 
-    logger.debug({ promptLength: prompt.length }, "LLM generate request");
+    logger.debug(
+      { promptLength: prompt.length, tier: resolvedTier },
+      "LLM generate request",
+    );
 
     const body: Record<string, unknown> = {
-      model: "claude-sonnet-4-20250514",
+      model: resolveDirectModelForTier(resolvedTier),
       max_tokens: maxTokens,
       temperature,
       messages: [{ role: "user", content: prompt }],
@@ -59,15 +80,32 @@ export class ClaudeLlmClient implements LlmClient {
       body.system = systemPrompt;
     }
 
-    const response = await fetch(this.baseUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": this.apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(body),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(this.baseUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": this.apiKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new ExternalApiError(
+          "Claude API",
+          `request timed out after ${this.timeoutMs}ms`,
+        );
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -113,6 +151,7 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
     const raw = await this.generate(prompt, {
       temperature: 0.3,
       systemPrompt: "You are a content auditor. Return ONLY valid JSON.",
+      tier: "premium",
     });
 
     const parsed = parseJsonObject<{
@@ -138,37 +177,122 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
   }
 }
 
-// Heartbeat LLM client（ローカル Claude Code 経由）
-const HEARTBEAT_POLL_MS = 500;
-const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
+// Heartbeat LLM client（ローカル Claude Code 経由・インプロセス直接実行）
+const CLAUDE_TIMEOUT_MS = 8 * 60 * 1000;
+
+function resolveHeartbeatModel(tier?: LlmTier): string {
+  const env = loadEnv();
+  const resolvedTier = tier ?? env.LLM_DEFAULT_TIER;
+  switch (resolvedTier) {
+    case "fast":
+      return env.LLM_HEARTBEAT_MODEL_FAST;
+    case "premium":
+      return env.LLM_HEARTBEAT_MODEL_PREMIUM;
+    default:
+      return env.LLM_HEARTBEAT_MODEL_STANDARD;
+  }
+}
+
+function buildSystemPrompt(
+  systemPrompt?: string,
+  options?: LlmGenerateOptions,
+): string | undefined {
+  const constraints: string[] = [];
+  const maxTokens = options?.maxTokens;
+
+  if (Number.isFinite(maxTokens) && (maxTokens ?? 0) > 0) {
+    constraints.push(
+      `Keep the response within approximately ${Math.floor(maxTokens ?? 0)} tokens.`,
+    );
+  }
+
+  if (typeof options?.temperature === "number") {
+    if (options.temperature <= 0.3) {
+      constraints.push(
+        "Be deterministic, concise, and avoid unnecessary variation.",
+      );
+    } else if (options.temperature >= 0.85) {
+      constraints.push(
+        "You may explore multiple phrasings, but stay precise and follow the requested format.",
+      );
+    }
+  }
+
+  const merged = [
+    systemPrompt?.trim(),
+    constraints.length > 0
+      ? `Additional generation constraints:\n${constraints.map((item) => `- ${item}`).join("\n")}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+
+  return merged || undefined;
+}
+
+function callClaudeCli(
+  prompt: string,
+  systemPrompt?: string,
+  options?: LlmGenerateOptions,
+): string {
+  const mergedSystemPrompt = buildSystemPrompt(systemPrompt, options);
+  const args = [
+    "--print",
+    "--output-format",
+    "text",
+    "--model",
+    resolveHeartbeatModel(options?.tier),
+  ];
+  if (mergedSystemPrompt) {
+    args.push("--system-prompt", mergedSystemPrompt);
+  }
+
+  logger.info(
+    { promptLength: prompt.length, tier: options?.tier },
+    "[HEARTBEAT] Calling Claude CLI",
+  );
+
+  const result = spawnSync("claude", args, {
+    input: prompt,
+    encoding: "utf-8",
+    timeout: CLAUDE_TIMEOUT_MS,
+    maxBuffer: 4 * 1024 * 1024,
+    env: { ...process.env, THREADOS_INTERNAL: "1" },
+  });
+
+  if (result.error) {
+    throw new Error(`Claude CLI 起動失敗: ${result.error.message}`);
+  }
+
+  const stdout = (result.stdout ?? "").trim();
+
+  if (
+    stdout.includes("out of extra usage") ||
+    stdout.includes("out of usage")
+  ) {
+    throw new Error(`Claude 使用量制限: ${stdout.slice(0, 100)}`);
+  }
+
+  if (result.status !== 0 && !stdout) {
+    const stderr = result.stderr?.trim() ?? "";
+    throw new Error(`Claude CLI エラー (${result.status}): ${stderr}`);
+  }
+
+  logger.info(
+    { responseLength: stdout.length },
+    "[HEARTBEAT] Claude CLI response received",
+  );
+
+  return stdout;
+}
 
 export class HeartbeatLlmClient implements LlmClient {
   async generate(
     prompt: string,
-    options?: {
-      maxTokens?: number;
-      temperature?: number;
-      systemPrompt?: string;
-    },
+    options?: LlmGenerateOptions,
   ): Promise<string> {
-    const now = new Date().toISOString();
-    const id = randomUUID();
-
-    db.insert(llmTaskQueue)
-      .values({
-        id,
-        status: "pending",
-        prompt,
-        systemPrompt: options?.systemPrompt ?? null,
-        optionsJson: options ? JSON.stringify(options) : null,
-        createdAt: now,
-        updatedAt: now,
-      })
-      .run();
-
-    logger.info({ taskId: id }, "[HEARTBEAT] LLM task queued");
-
-    return this._poll(id);
+    return callClaudeCli(prompt, options?.systemPrompt, options);
   }
 
   async audit(
@@ -201,6 +325,7 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
     const raw = await this.generate(prompt, {
       temperature: 0.3,
       systemPrompt: "You are a content auditor. Return ONLY valid JSON.",
+      tier: "premium",
     });
 
     const parsed = parseJsonObject<{
@@ -223,47 +348,6 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
     }
 
     return parsed;
-  }
-
-  private async _poll(taskId: string): Promise<string> {
-    const deadline = Date.now() + HEARTBEAT_TIMEOUT_MS;
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, HEARTBEAT_POLL_MS));
-
-      const row = db
-        .select()
-        .from(llmTaskQueue)
-        .where(eq(llmTaskQueue.id, taskId))
-        .get();
-
-      if (!row) {
-        throw new Error(`[HEARTBEAT] LLM task ${taskId} disappeared from queue`);
-      }
-
-      if (row.status === "done") {
-        logger.info({ taskId }, "[HEARTBEAT] LLM task done");
-        return row.result ?? "";
-      }
-      if (row.status === "error") {
-        const errorMsg = row.error ?? "unknown error";
-        logger.warn({ taskId, error: errorMsg }, "[HEARTBEAT] LLM task error");
-        throw new Error(`[HEARTBEAT] LLM task ${taskId} failed: ${errorMsg}`);
-      }
-    }
-
-    // タイムアウトした行を error に更新して残骸を残さない
-    db.update(llmTaskQueue)
-      .set({
-        status: "error",
-        error: `timed out after ${HEARTBEAT_TIMEOUT_MS}ms`,
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(llmTaskQueue.id, taskId))
-      .run();
-
-    logger.warn({ taskId }, "[HEARTBEAT] LLM task timed out");
-    throw new Error(`[HEARTBEAT] LLM task ${taskId} timed out after ${HEARTBEAT_TIMEOUT_MS}ms`);
   }
 }
 

@@ -121,6 +121,16 @@ function summarizeTopBottom(
   return `${label}: best=${best.key} (${best.score.toFixed(3)}), worst=${worst.key} (${worst.score.toFixed(3)})`;
 }
 
+function safeParseMetrics(
+  raw: string,
+): PerformanceBucket & { engagementRate?: number } {
+  try {
+    return JSON.parse(raw) as PerformanceBucket & { engagementRate?: number };
+  } catch {
+    return { ...createBucket(), engagementRate: 0 };
+  }
+}
+
 export class EngagementAnalysisServiceImpl
   implements EngagementAnalysisService
 {
@@ -130,9 +140,7 @@ export class EngagementAnalysisServiceImpl
     const parsedRows = summaryRows.map((row) => ({
       periodType: row.periodType,
       periodKey: row.periodKey,
-      metrics: JSON.parse(row.metrics) as PerformanceBucket & {
-        engagementRate: number;
-      },
+      metrics: safeParseMetrics(row.metrics),
     }));
 
     const pickBestWorst = (periodType: PerformanceRow["periodType"]) => {
@@ -140,7 +148,8 @@ export class EngagementAnalysisServiceImpl
         .filter((row) => row.periodType === periodType)
         .sort(
           (left, right) =>
-            right.metrics.engagementRate - left.metrics.engagementRate,
+            (right.metrics.engagementRate ?? 0) -
+            (left.metrics.engagementRate ?? 0),
         );
       const best = rows[0];
       const worst = rows.at(-1);
@@ -478,14 +487,14 @@ export class EngagementAnalysisServiceImpl
     const replies = await api.getReplies(postResult.threadsPostId);
     const now = new Date().toISOString();
 
-    for (const reply of replies) {
+    const classifyReply = async (reply: (typeof replies)[number]) => {
       const existingReply = db
         .select()
         .from(threadReplies)
         .where(eq(threadReplies.threadsReplyId, reply.id))
         .get();
       if (existingReply) {
-        continue;
+        return;
       }
 
       const replyId = randomUUID();
@@ -523,6 +532,7 @@ export class EngagementAnalysisServiceImpl
 
       const raw = await llm.generate(classificationPrompt, {
         temperature: 0.3,
+        tier: "fast",
       });
       let classification: {
         decision: string;
@@ -595,6 +605,12 @@ export class EngagementAnalysisServiceImpl
             .run();
         }
       }
+    };
+
+    const maxConcurrent = 5;
+    for (let index = 0; index < replies.length; index += maxConcurrent) {
+      const chunk = replies.slice(index, index + maxConcurrent);
+      await Promise.all(chunk.map((reply) => classifyReply(reply)));
     }
 
     logger.info(
@@ -633,7 +649,10 @@ export class EngagementAnalysisServiceImpl
 
 action は「何をどう変えるか」がすぐ分かる粒度で返してください。`;
 
-    const raw = await llm.generate(prompt, { temperature: 0.5 });
+    const raw = await llm.generate(prompt, {
+      temperature: 0.5,
+      tier: "premium",
+    });
     const parsed =
       parseJsonArray<{ insight: string; action: string; priority: string }>(
         raw,
@@ -716,6 +735,6 @@ ${refreshed.summaryLines.map((line) => `- ${line}`).join("\n")}
 4. 来週の実験案
 5. 投稿時間・テーマ・フック・CTAの改善方針`;
 
-    return llm.generate(prompt, { temperature: 0.6 });
+    return llm.generate(prompt, { temperature: 0.6, tier: "standard" });
   }
 }

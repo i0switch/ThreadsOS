@@ -44,7 +44,7 @@ export interface ContentSchedulerService {
   syncNoteSlotsFromAuditedDrafts(maxSlots?: number): Promise<number>;
   getNextThreadSlot(): Promise<ContentSlot | null>;
   getNextNoteSlot(): Promise<ContentSlot | null>;
-  reserveSlot(slotId: string, draftId: string): Promise<void>;
+  reserveSlot(slotId: string, draftId: string): Promise<boolean>;
   completeSlot(slotId: string): Promise<void>;
   skipSlot(slotId: string): Promise<void>;
 }
@@ -556,7 +556,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
           id: randomUUID(),
           channel: "threads",
           scheduledAt: new Date(
-            baseTime.getTime() + inserted * 3_600_000,
+            baseTime.getTime() + (inserted + 1) * 3_600_000,
           ).toISOString(),
           topicId: draft.topicId,
           draftId: draft.id,
@@ -681,8 +681,9 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
     return row ?? null;
   }
 
-  async reserveSlot(slotId: string, draftId: string): Promise<void> {
-    db.update(contentSlots)
+  async reserveSlot(slotId: string, draftId: string): Promise<boolean> {
+    const result = db
+      .update(contentSlots)
       .set({
         draftId,
         status: "reserved",
@@ -692,6 +693,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
         and(eq(contentSlots.id, slotId), eq(contentSlots.status, "pending")),
       )
       .run();
+    return result.changes > 0;
   }
 
   async completeSlot(slotId: string): Promise<void> {

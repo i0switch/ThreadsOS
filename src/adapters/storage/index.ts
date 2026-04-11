@@ -23,7 +23,11 @@ export class FileSystemStorageClient implements StorageClient {
   async saveFile(path: string, content: string | Buffer): Promise<void> {
     const fullPath = this.resolvePath(path);
     await mkdir(dirname(fullPath), { recursive: true });
-    await writeFile(fullPath, content, "utf8");
+    if (typeof content === "string") {
+      await writeFile(fullPath, content, "utf8");
+    } else {
+      await writeFile(fullPath, content);
+    }
     logger.debug({ path: fullPath }, "File saved");
   }
 

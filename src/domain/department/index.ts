@@ -43,12 +43,25 @@ export interface DepartmentExecutionResult {
   payload?: Record<string, unknown>;
 }
 
+export interface DepartmentReport {
+  department: DepartmentName;
+  /** 現在の状態サマリー（LLMが読む用） */
+  summary: string;
+  /** 定量データ */
+  metrics: Record<string, number>;
+  /** 部署側の推奨 */
+  recommendation: string;
+  /** 最終実行時刻 */
+  lastExecutedAt: string | null;
+}
+
 export interface DepartmentExecutor {
   department: DepartmentName;
   supports(actionType: ActionType): boolean;
   execute(
     context: DepartmentExecutionContext,
   ): Promise<DepartmentExecutionResult>;
+  report(): DepartmentReport;
 }
 
 export function resolveDepartmentName(actionType: ActionType): DepartmentName {

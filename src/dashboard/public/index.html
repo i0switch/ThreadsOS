@@ -129,6 +129,30 @@
     .stack-stat-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .14em; color: #8093aa; font-weight: 700; }
     .stack-stat-value { margin-top: .35rem; font-size: .88rem; color: #10253d; font-weight: 600; }
     .stack-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
+    .detail-shell { display: flex; flex-direction: column; gap: 1rem; }
+    .detail-hero { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr) auto; align-items: start; }
+    .detail-summary { background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(246,250,255,.95)); border: 1px solid #dbe5f1; border-radius: 1.5rem; padding: 1.15rem; box-shadow: 0 12px 24px rgba(15,23,42,.04); }
+    .detail-summary-copy { color: #60758f; font-size: .88rem; line-height: 1.7; margin-top: .35rem; }
+    .detail-stats { display: grid; gap: .75rem; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 1rem; }
+    .detail-stat { background: linear-gradient(180deg, #ffffff, #f8fbff); border: 1px solid #dbe5f1; border-radius: 1.15rem; padding: .9rem 1rem; min-height: 5.8rem; }
+    .detail-stat-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .14em; color: #7d92aa; font-weight: 700; }
+    .detail-stat-value { margin-top: .55rem; color: #10253d; font-size: 1.15rem; font-weight: 700; line-height: 1.25; }
+    .detail-stat-copy { margin-top: .38rem; color: #6f8199; font-size: .78rem; line-height: 1.5; }
+    .detail-grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .detail-card { background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(247,250,255,.95)); border: 1px solid #dbe5f1; border-radius: 1.45rem; padding: 1rem 1.05rem; box-shadow: 0 10px 24px rgba(15,23,42,.035); }
+    .detail-card-title { font-size: .72rem; text-transform: uppercase; letter-spacing: .16em; color: #7c8fa7; font-weight: 700; }
+    .detail-card-subtitle { margin-top: .35rem; color: #6f8199; font-size: .8rem; line-height: 1.55; }
+    .detail-list { display: flex; flex-direction: column; gap: .65rem; margin-top: .9rem; }
+    .detail-item { background: #ffffff; border: 1px solid #dbe5f1; border-radius: 1rem; padding: .8rem .9rem; color: #30475f; font-size: .9rem; line-height: 1.55; }
+    .detail-item strong { color: #10253d; }
+    .detail-item-muted { color: #6f8199; }
+    .detail-item-accent { background: rgba(14,165,233,.08); border-color: rgba(14,165,233,.18); color: #0f4b78; }
+    .detail-item-warn { background: rgba(245,158,11,.08); border-color: rgba(245,158,11,.2); color: #8b5d16; }
+    .detail-item-bad { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.18); color: #9f1d1d; }
+    .detail-pill-row { display: flex; flex-wrap: wrap; gap: .55rem; margin-top: .95rem; }
+    .detail-action-grid { display: grid; gap: 1rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .detail-form-grid { display: grid; gap: .8rem; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .detail-note { margin-top: .55rem; color: #6f8199; font-size: .78rem; line-height: 1.6; }
     .ghost-button { cursor: pointer; transition: background-color 160ms ease, transform 80ms ease; }
     .ghost-button:hover { transform: translateY(-1px); }
     .ghost-button:active { transform: translateY(0); }
@@ -168,6 +192,8 @@
       .topbar { flex-direction: column; align-items: flex-start; }
       .workspace-content { padding: 1rem; }
       .stack-card-main { grid-template-columns: 1fr; }
+      .detail-hero, .detail-grid, .detail-action-grid, .detail-form-grid { grid-template-columns: 1fr; }
+      .detail-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -223,14 +249,14 @@
         <div class="tab-panel active" id="tab-overview">
           <section class="dashboard-cluster">
             <div class="cluster-header">概要</div>
-            <div class="grid gap-6 xl:grid-cols-[1.35fr_.65fr]">
+            <div class="grid gap-6">
               <section id="summary-section" class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/summary" hx-trigger="load, every 30s" hx-target="#summary-content" hx-swap="innerHTML" hx-indicator="#summary-indicator">
-                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">システム概要</div><div class="section-name">司令塔サマリー</div><div class="section-subtitle">方針、アラート、成果、次回 heartbeat を最初に読むエリアです。</div></div><span id="summary-indicator" class="htmx-indicator text-xs text-cyan-300">読み込み中...</span></div>
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">全体状況</div><div class="section-name">いま何が起きているか</div><div class="section-subtitle">状態、止まり、次の定期チェック、今見るべきことを最初に把握するエリアです。</div></div><span id="summary-indicator" class="htmx-indicator text-xs text-cyan-300">読み込み中...</span></div>
                 <div id="summary-content"><p class="text-slate-400">読み込み中...</p></div>
               </section>
-              <section id="budget-section" class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/summary" hx-trigger="load, every 45s" hx-target="#budget-content" hx-swap="innerHTML" hx-indicator="#budget-indicator">
-                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">予算監視</div><div class="section-name">予算圧迫の監視</div><div class="section-subtitle">global と各部署の tokens / calls を横並びで確認します。</div></div><span id="budget-indicator" class="htmx-indicator text-xs text-cyan-300">読み込み中...</span></div>
-                <div id="budget-content"><p class="text-slate-400">読み込み中...</p></div>
+              <section id="overview-workstreams-section" class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/summary" hx-trigger="load, every 45s" hx-target="#overview-workstreams-content" hx-swap="innerHTML" hx-indicator="#overview-workstreams-indicator">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">運用の中身</div><div class="section-name">部署の現在地</div><div class="section-subtitle">仕様に沿った役割のまとまりで、どこが進み、どこが止まっているかを見ます。</div></div><span id="overview-workstreams-indicator" class="htmx-indicator text-xs text-cyan-300">読み込み中...</span></div>
+                <div id="overview-workstreams-content"><p class="text-slate-400">読み込み中...</p></div>
               </section>
             </div>
           </section>
@@ -240,7 +266,7 @@
         <div class="tab-panel" id="tab-approvals">
           <section class="dashboard-cluster">
             <div class="cluster-header">承認管理</div>
-            <div class="grid gap-6 xl:grid-cols-[1.08fr_.92fr]">
+            <div class="grid gap-6">
               <section class="panel rounded-3xl p-5 sm:p-6">
                 <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">提案一覧</div><div class="section-name">承認待ちの提案</div><div class="section-subtitle">理由、根拠、期待効果まで含めて一気に確認します。</div></div></div>
                 <div id="proposals-content" hx-get="/api/dashboard/proposals" hx-trigger="load, every 30s" hx-target="#proposals-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
@@ -263,7 +289,7 @@
         <div class="tab-panel" id="tab-operations">
           <section class="dashboard-cluster">
             <div class="cluster-header">運用状況</div>
-            <div class="grid gap-6 xl:grid-cols-[1.05fr_.95fr]">
+            <div class="grid gap-6">
               <section class="panel rounded-3xl p-5 sm:p-6" hx-get="/api/dashboard/departments" hx-trigger="load, every 30s" hx-target="#departments-content" hx-swap="innerHTML">
                 <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">部署一覧</div><div class="section-name">部署の現在地</div><div class="section-subtitle">どこが進んでいて、どこが止まっているかを一覧で見ます。</div></div></div>
                 <div id="departments-content"><p class="text-slate-400">読み込み中...</p></div>
@@ -273,7 +299,7 @@
                 <div id="agents-content" hx-get="/api/dashboard/agents" hx-trigger="load, every 30s" hx-target="#agents-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
               </section>
             </div>
-            <div class="grid gap-6 xl:grid-cols-2">
+            <div class="grid gap-6">
               <section class="panel rounded-3xl p-5 sm:p-6">
                 <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">部署の詳細</div><div class="section-name">部署詳細</div><div class="section-subtitle">入力、出力、停滞、優先タスクをまとめて確認します。</div></div></div>
                 <div id="department-detail-content" class="space-y-4"><p class="text-slate-400">部署カードの「詳細」を押すとここに展開します。</p></div>
@@ -284,19 +310,20 @@
               </section>
             </div>
             <section id="control-section" class="panel-strong rounded-3xl p-5 sm:p-6">
-              <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between mb-4"><div><div class="section-title">操作パネル</div><div class="section-name">手動操作</div><div class="section-subtitle">停止、再開、ディレクティブ投入をここで行います。</div></div></div>
+              <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between mb-4"><div><div class="section-title">操作パネル</div><div class="section-name">手動操作</div><div class="section-subtitle">全体停止と再開、次回の定期チェックや担当者に渡す優先メモをここで設定します。</div></div></div>
               <div class="flex flex-wrap gap-3 mb-5">
                 <button type="button" hx-post="/api/dashboard/control/pause" hx-vals='{"scope":"global"}' hx-target="#control-result" hx-swap="innerHTML" class="ghost-button bg-rose-500/15 hover:bg-rose-500/22 text-rose-100 px-4 py-2.5 rounded-xl font-semibold border border-rose-400/20">全体停止</button>
                 <button type="button" hx-post="/api/dashboard/control/resume" hx-vals='{"scope":"global"}' hx-target="#control-result" hx-swap="innerHTML" class="ghost-button bg-emerald-500/15 hover:bg-emerald-500/22 text-emerald-100 px-4 py-2.5 rounded-xl font-semibold border border-emerald-400/20">全体再開</button>
               </div>
               <div id="control-result" class="text-sm text-slate-300 mb-5"></div>
-              <h3 class="text-sm font-semibold text-slate-200 mb-2">ディレクティブ追加</h3>
+              <h3 class="text-sm font-semibold text-slate-200 mb-2">次回の運用メモ</h3>
+              <p class="text-sm text-slate-400 mb-3">ここで入れた内容は、次回の定期チェックや担当者判断で優先したいことを伝えるメモです。</p>
               <form hx-post="/api/dashboard/control/directives" hx-target="#directive-result" hx-swap="innerHTML" class="space-y-3">
                 <div class="grid gap-3 md:grid-cols-2">
                   <select name="target" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-400">
-                    <option value="global">全体</option>
-                    <option value="next_heartbeat">次回HB重点</option>
-                    <option value="assignee">担当者指示</option>
+                    <option value="global">全体へのメモ</option>
+                    <option value="next_heartbeat">次回の定期チェックで優先</option>
+                    <option value="assignee">担当者への指示</option>
                   </select>
                   <select name="priority" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-400">
                     <option value="low">低</option>
@@ -305,14 +332,14 @@
                   </select>
                 </div>
                 <div class="grid gap-3 md:grid-cols-2">
-                  <input type="text" name="scope" value="global" placeholder="スコープ (例: global)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
-                  <input type="text" name="department" placeholder="部署名 (任意)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                  <input type="text" name="scope" value="global" placeholder="対象範囲 (例: global)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                  <input type="text" name="department" placeholder="部署名 (必要なら)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
                 </div>
                 <div class="grid gap-3 md:grid-cols-2">
-                  <input type="text" name="agentId" placeholder="エージェントID (担当者指示時)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
-                  <input type="text" name="content" placeholder="例: 次回HBでは提案の承認を最優先" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                  <input type="text" name="agentId" placeholder="担当者ID (担当者に伝えるときだけ)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
+                  <input type="text" name="content" placeholder="例: 次回は承認待ちの確認を最優先" class="bg-slate-950/70 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400" />
                 </div>
-                <button type="submit" class="ghost-button bg-cyan-500/15 hover:bg-cyan-500/24 text-cyan-100 px-4 py-3 rounded-xl text-sm font-semibold border border-cyan-400/20">送信</button>
+                <button type="submit" class="ghost-button bg-cyan-500/15 hover:bg-cyan-500/24 text-cyan-100 px-4 py-3 rounded-xl text-sm font-semibold border border-cyan-400/20">メモを反映</button>
               </form>
               <div id="directive-result" class="text-sm text-slate-300 mt-3"></div>
             </section>
@@ -323,7 +350,11 @@
         <div class="tab-panel" id="tab-telemetry">
           <section class="dashboard-cluster">
             <div class="cluster-header">テレメトリ</div>
-            <div class="grid gap-6 xl:grid-cols-[0.82fr_1.18fr]">
+            <div class="grid gap-6">
+              <section class="panel rounded-3xl p-5 sm:p-6">
+                <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">予算監視</div><div class="section-name">予算の残量</div><div class="section-subtitle">各部署のトークンと呼び出しの消化をまとめて確認します。</div></div></div>
+                <div id="telemetry-budget-content" hx-get="/api/dashboard/summary" hx-trigger="load, every 45s" hx-target="#telemetry-budget-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
+              </section>
               <section class="panel rounded-3xl p-5 sm:p-6">
                 <div class="flex items-start justify-between gap-4 mb-4"><div><div class="section-title">KPI スナップショット</div><div class="section-name">指標の観測面</div><div class="section-subtitle">channel / period / metric をまとめて追跡します。</div></div></div>
                 <div id="kpi-content" hx-get="/api/dashboard/kpi" hx-trigger="load, every 60s" hx-target="#kpi-content" hx-swap="innerHTML"><p class="text-slate-400">読み込み中...</p></div>
@@ -348,7 +379,7 @@
     function fds(v,f="-"){return !v?f:isDateLike(v)?new Date(v).toLocaleDateString("ja-JP"):escapeHtml(v)}
     function fn(v,f="-"){if(v==null||v==="")return f;const n=Number(v);return Number.isNaN(n)?escapeHtml(v):n.toLocaleString("ja-JP")}
     function fp(v){return Number.isFinite(v)?`${Math.round(v*100)}%`:"-"}
-    function st(v){const s=String(v??"").toLowerCase();if(["completed","approved","pass","published","healthy","active","ready","running"].includes(s))return "chip chip-good";if(["failed","rejected","reject","error","critical","paused","blocked"].includes(s))return "chip chip-bad";if(["pending","processing","queued","warn","warning","degraded","limited","idle"].includes(s))return "chip chip-warn";return "chip chip-neutral"}
+    function st(v){const s=String(v??"").toLowerCase();if(["completed","approved","pass","published","healthy","active","ready","running","ok"].includes(s))return "chip chip-good";if(["failed","rejected","reject","error","critical","paused","blocked","stalled"].includes(s))return "chip chip-bad";if(["pending","processing","queued","warn","warning","degraded","limited","idle","attention"].includes(s))return "chip chip-warn";return "chip chip-neutral"}
     function pr(v){const s=String(v??"").toLowerCase();return ["critical","high"].includes(s)?"chip chip-bad":s==="medium"?"chip chip-warn":"chip chip-neutral"}
     function pct(u,l){const n=Number(u),d=Number(l);return Number.isFinite(n)&&Number.isFinite(d)&&d>0?Math.min(1,Math.max(0,n/d)):null}
     function norm(d){const s=d?.systemSummary??d?.summary??d??{};return{s,proposals:a(d?.proposals??s?.proposals),agents:a(d?.agents??d?.agentStates??s?.agents??s?.agentStates??s?.agentHighlights),budgets:a(d?.budgets??d?.budgetTracking??s?.budgets??s?.budget??[]),alerts:a(s?.importantAlerts??s?.alerts??d?.alerts),decisions:a(s?.recentDecisions??d?.recentDecisions),nextHeartbeat:s?.nextHeartbeat??s?.nextHeartbeats?.[0]??null}}
@@ -364,11 +395,38 @@
 
     /* ── 翻訳レイヤー ──────────────────────────────────── */
     const T={
-      phase:{generate_note:"記事生成",generate_and_post:"投稿生成・公開",fetch_engagement:"エンゲージメント取得",notify:"通知送信",research_note:"記事リサーチ",research_thread:"Threadsリサーチ",analyze:"分析",audit:"監査",publish:"公開",draft:"下書き作成"},
+      phase:{generate_note:"記事を作成",generate_and_post:"投稿を作成して公開",fetch_engagement:"反応を確認",notify:"通知送信",research_note:"記事リサーチ",research_thread:"Threadsリサーチ",analyze:"分析",audit:"監査",publish:"公開",draft:"下書き作成"},
       role:{leader:"リーダー",generator:"生成担当",analyst:"分析担当",optimizer:"最適化担当",reply_manager:"リプライ管理",reply_generator:"リプライ生成",competitor_research:"競合リサーチ",researcher:"リサーチ担当",scheduler:"スケジューラ",executive:"統括","role unset":"未設定"},
-      dept:{note:"note運用",threads:"Threads運用",community:"コミュニティ",optimization:"最適化",research:"リサーチ",command:"司令部",system:"システム"},
-      status:{completed:"完了",failed:"失敗",pending:"保留中",idle:"待機中",active:"稼働中",paused:"停止中",approved:"承認済",rejected:"却下",running:"実行中",ready:"準備完了",pass:"合格",published:"公開済",blocked:"ブロック中",processing:"処理中",queued:"キュー中",error:"エラー",healthy:"正常",degraded:"劣化",limited:"制限中",warn:"警告",warning:"警告",critical:"危険",normal:"正常",ok:"正常"},
-      job:{"hourly-heartbeat":"定期ハートビート","nightly-note-pipeline":"夜間note生成","daily-threads-plan":"日次Threads計画","daily-topic-research":"日次トピックリサーチ","weekly-retro":"週次振り返り","post-publish-followup":"投稿後フォロー","refresh-threads-token":"トークン更新"},
+      dept:{note:"note運用",threads:"Threads投稿",community:"返信・反応分析",optimization:"改善判断",research:"リサーチ",command:"司令塔",system:"システム"},
+      agent:{
+        "Executive Director":"統括ディレクター",
+        "Trend Researcher":"トレンド調査担当",
+        "Research Director":"リサーチ責任者",
+        "Threads Competitor Researcher":"Threads競合リサーチ担当",
+        "note Competitor Researcher":"note競合リサーチ担当",
+        "Threads Post Generator":"Threads投稿作成担当",
+        "Threads Operations Director":"Threads運用責任者",
+        "Threads Reply Generator":"返信文作成担当",
+        "note Article Generator":"note記事作成担当",
+        "note Operations Director":"note運用責任者",
+        "Reply Manager":"返信管理担当",
+        "Community Director":"コミュニティ責任者",
+        "Cadence Optimizer":"投稿ペース最適化",
+        "Optimization Director":"改善判断責任者",
+        "hourly-heartbeat":"定期チェック",
+      },
+      stage:{
+        "leader_review":"部署確認",
+        "executive_review":"全体確認",
+        "human_review":"人の確認",
+        "approved":"承認済み",
+        "rejected":"却下",
+        "executed":"反映済み",
+        "optimization":"改善判断",
+        "created":"作成",
+      },
+      status:{completed:"完了",failed:"失敗",pending:"保留中",idle:"待機中",active:"稼働中",paused:"停止中",approved:"承認済",rejected:"却下",running:"実行中",ready:"準備完了",pass:"合格",published:"公開済",blocked:"ブロック中",processing:"処理中",queued:"キュー中",error:"エラー",healthy:"正常",degraded:"劣化",limited:"制限中",warn:"警告",warning:"警告",critical:"危険",normal:"正常",ok:"正常",attention:"注意",stalled:"停滞"},
+      job:{"hourly-heartbeat":"定期チェック","nightly-note-pipeline":"夜間note生成","daily-threads-plan":"日次Threads計画","daily-topic-research":"日次トピックリサーチ","weekly-retro":"週次振り返り","post-publish-followup":"投稿後フォロー","refresh-threads-token":"トークン更新"},
       decision:{frequency:"投稿頻度",timing:"投稿タイミング","frequency adjustment":"投稿頻度の調整","timing adjustment":"タイミング調整"},
       reason:{"Adjusted by cadence optimizer":"投稿ペースを自動最適化","No draft-bound pending slots to reschedule":"リスケ対象の下書き枠なし","Progress notification sent":"進捗通知を送信済み"},
       period:{cta:"CTA型",hook:"フック型",theme:"テーマ別",weekday:"曜日別",hour:"時間帯別",derived:"算出指標",operations:"運用指標"},
@@ -379,6 +437,7 @@
         "No posts found for followup in the last 24 hours.":"直近24時間にフォロー対象の投稿なし",
         "[DRY-RUN] Would generate weekly retrospective.":"[テスト] 週次振り返りを生成予定",
         "[DRY-RUN] Would generate note drafts from winning themes.":"[テスト] 人気テーマからnote下書きを生成予定",
+        "Researched note competitors for 3 topics.":"note競合を3テーマ分リサーチ",
       },
     };
     function tLog(v){if(!v)return"-";const s=String(v);for(const[k,ja]of Object.entries(T.log)){if(s.includes(k))return ja}return s.replace(/Generated (\d+) note drafts?\./,"note下書きを$1件生成").replace(/Auto-published (\d+) notes?/,"$1件を自動公開").replace(/Generated (\d+) drafts?, (\d+) passed audit/,"$1件生成、$2件が監査通過").replace(/Researched (\d+) topics?\./,"$1件のトピックをリサーチ").replace(/Progress notification sent/,"進捗通知を送信").replace(/\(dry-run\)/,"(テスト)").replace(/FAILED:/,"失敗:").replace(/timed out after (\d+)ms/,"$1ms でタイムアウト")}
@@ -393,6 +452,30 @@
     function tPeriod(v){return t("period",v)}
     function tPeriodKey(v){return t("periodKey",v)}
     function tMetric(v){return t("metric",v)}
+    function tStage(v){return t("stage",v)}
+    function tAgentName(v){
+      if(!v)return"-";
+      const s=String(v);
+      return T.agent?.[s]??T.job?.[s]??s;
+    }
+    function humanizeDetailText(v){
+      if(v==null||v==="")return"-";
+      let s=String(v);
+      s=s.replace(/\bcycle:/g,"運用サイクル: ");
+      s=s.replace(/\bdaily:/g,"日次まとめ: ");
+      s=s.replace(/\bresearch_threads\b/g,"Threadsリサーチ");
+      s=s.replace(/\bobjective未設定\b/g,"方針未設定");
+      s=s.replace(/\bstatus未設定\b/g,"状態未設定");
+      s=s.replace(/\brole unset\b/gi,"未設定");
+      for(const [k,val] of Object.entries(T.phase))s=s.replace(new RegExp(`\\b${k}\\b`,"g"),val);
+      for(const [k,val] of Object.entries(T.status))s=s.replace(new RegExp(`\\b${k}\\b`,"gi"),val);
+      for(const [k,val] of Object.entries(T.role))s=s.replace(new RegExp(`\\b${k}\\b`,"gi"),val);
+      for(const [k,val] of Object.entries(T.job))s=s.replace(new RegExp(`\\b${k}\\b`,"g"),val);
+      for(const [k,val] of Object.entries(T.stage))s=s.replace(new RegExp(`\\b${k}\\b`,"g"),val);
+      for(const [k,val] of Object.entries(T.agent))s=s.replace(new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"g"),val);
+      s=s.replace(/ \/\s/g," → ");
+      return tLog(s);
+    }
 
     /* ── Tab切替 ────────────────────────────────────────── */
     function switchTab(tabId){
@@ -417,34 +500,66 @@
 
     /* ── Render: Summary ───────────────────────────────── */
     function renderSummary(d){
-      const{s,budgets,alerts,decisions,nextHeartbeat}=norm(d);
-      const thread24h=s.threads24h??d?.threads24h,thread7d=s.threads7d??d?.threads7d,note24h=s.notes24h??d?.notes24h,note7d=s.notes7d??d?.notes7d;
-      const currentTheme=s.currentTheme??s.theme??s.topic??s.genre??s.objective??"未設定";
-      const currentPolicy=s.currentPolicy??s.policy??s.direction??s.strategy??"方針未設定";
-      const importantAlerts=a(s.importantAlerts??alerts);
-      const agentHighlights=a(s.agentHighlights??s.agents??d?.agents);
-      const statusVal=s.systemStatus??s.status??s.mode??"normal";
-      const policyDisplay=currentPolicy.replace(/funnel_expansion/g,"ファネル拡大").replace(/bootstrap/g,"立ち上げ").replace(/actions:/g,"").replace(/generate_note/g,"note記事生成").replace(/generate_thread/g,"スレッド生成").replace(/\//g," → ");
-      const cards=[
-        ["テーマ",currentTheme,policyDisplay],
-        ["状態",tStatus(statusVal),s.updatedAt?`更新 ${fd(s.updatedAt)}`:"更新時刻なし"],
-        ["次回HB",nextHeartbeat?.nextAt??s.nextHeartbeatAt??s.nextRunAt??"未設定",nextHeartbeat?.jobName?`${escapeHtml(tJob(String(nextHeartbeat.jobName)))} を監視中`:"次回予定を待機中"],
-        ["アラート",importantAlerts.length,importantAlerts.length?"要対応あり":"問題なし"],
-      ];
+      const {s}=norm(d);
+      const health=s.health??"warning";
+      const currentTheme=s.currentTheme??"未設定";
+      const currentPolicy=s.currentPolicy??"方針未設定";
+      const channelSnapshots=a(s.channelSnapshots??[]);
+      const userActionItems=a(s.userActionItems??[]);
+      const reasons=a(s.healthReasons??[]);
+      const heartbeatLabel=s.nextHeartbeatAt?fd(s.nextHeartbeatAt):"未設定";
+      const freshness=s.heartbeatFreshness==="fresh"?"予定あり":s.heartbeatFreshness==="stale"?"遅れ気味":"未設定";
+      const policyDisplay=currentPolicy.replace(/funnel_expansion/g,"ファネル拡大").replace(/bootstrap/g,"立ち上げ").replace(/actions:/g,"").replace(/generate_and_post/g,"投稿を作成して公開").replace(/generate_note/g,"note記事生成").replace(/generate_thread/g,"スレッド生成").replace(/research_note/g,"記事リサーチ").replace(/research_thread/g,"Threadsリサーチ").replace(/fetch_engagement/g,"反応確認").replace(/strategy:/g,"方針:").replace(/ \/ /g," → ").replace(/\//g," → ");
       return`
-        <div class="space-y-5">
-          <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">${cards.map(c=>`<div class="metric-card"><div class="metric-label">${escapeHtml(String(c[0]))}</div><div class="metric-value">${escapeHtml(String(c[1]))}</div><div class="metric-sub">${escapeHtml(String(c[2]))}</div></div>`).join("")}</div>
-          <div class="panel rounded-2xl p-4">
-            <div class="section-title mb-3">シグナル</div>
-            <div class="space-y-3">
-              <div><div class="text-xs text-slate-500 uppercase tracking-[0.18em] font-bold">重要アラート</div>${importantAlerts.length?`<ul class="mt-2 space-y-2">${importantAlerts.slice(0,4).map(alert=>{const reason=String(alert.reason??alert.title??alert);const jaReason=T.alert[reason]??reason;return`<li class="flex items-start gap-2 text-sm text-slate-300 border border-white/6 rounded-xl px-3 py-2 bg-white/3"><span class="mt-1 h-2 w-2 rounded-full bg-rose-400 shrink-0"></span><span>${escapeHtml(jaReason)}</span></li>`}).join("")}</ul>`:`<p class="mt-2 text-sm text-slate-500">アラートなし</p>`}</div>
-              <div><div class="text-xs text-slate-500 uppercase tracking-[0.18em] font-bold">最近の判断</div>${decisions.length?`<ul class="mt-2 space-y-2">${decisions.slice(0,4).map(dec=>`<li class="text-sm text-slate-300 border border-white/6 rounded-xl px-3 py-2 bg-white/3"><span class="font-semibold text-cyan-200">${escapeHtml(tDept(dec.channel??dec.scope??"system"))}</span><span class="text-slate-400"> / </span><span>${escapeHtml(tDecision(dec.decisionType??dec.title??dec.type??"decision"))}</span><div class="text-xs text-slate-500 mt-1">${escapeHtml(tReason(dec.reason??dec.summary??""))}</div></li>`).join("")}</ul>`:`<p class="mt-2 text-sm text-slate-500">直近の判断なし</p>`}</div>
+        <div class="space-y-6">
+          <div class="panel-strong rounded-3xl p-5 sm:p-6">
+            <div class="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+              <div class="space-y-4">
+                <div class="content-row">
+                  <span class="${st(health)}">${escapeHtml(tStatus(health))}</span>
+                  <span class="chip chip-neutral">テーマ: ${escapeHtml(currentTheme)}</span>
+                </div>
+                <div class="section-name">${escapeHtml(String(s.healthHeadline??"状況の要約を準備中"))}</div>
+                <div class="text-sm text-slate-400 leading-7">${escapeHtml(policyDisplay)}</div>
+                <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <div class="mini-stat">
+                    <div class="mini-stat-label">次の定期チェック</div>
+                    <div class="mini-stat-title">${escapeHtml(heartbeatLabel)}</div>
+                    <div class="mini-stat-copy">${escapeHtml(freshness)}</div>
+                  </div>
+                  <div class="mini-stat">
+                    <div class="mini-stat-label">最後の定期チェック</div>
+                    <div class="mini-stat-title">${escapeHtml(fd(s.lastHeartbeatAt,"未記録"))}</div>
+                    <div class="mini-stat-copy">1時間ごとの自動巡回を想定</div>
+                  </div>
+                  <div class="mini-stat">
+                    <div class="mini-stat-label">要対応</div>
+                    <div class="mini-stat-title">${fn(userActionItems.length, "0")}件</div>
+                    <div class="mini-stat-copy">${userActionItems.length?"先に人の判断が必要":"いま人の判断は不要"}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="panel rounded-2xl p-4">
+                <div class="section-title mb-3">状態の根拠</div>
+                ${reasons.length?`<div class="space-y-2">${reasons.map(reason=>`<div class="border border-white/6 rounded-2xl px-3 py-3 text-sm text-slate-300 bg-white/3">${escapeHtml(String(reason))}</div>`).join("")}</div>`:`<p class="text-sm text-slate-500">大きな問題は見えていない。</p>`}
+              </div>
             </div>
           </div>
-          ${agentHighlights.length?`<div class="panel rounded-2xl p-4"><div class="section-title mb-3">主要担当者</div><table class="w-full text-sm"><tbody>${agentHighlights.slice(0,3).map(agent=>`<tr class="border-b border-white/6"><td class="py-2 pr-3 font-semibold">${escapeHtml(String(agent.name??agent.jobName??""))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tDept(agent.department))} / ${escapeHtml(tRole(agent.role))}</td><td class="py-2 pr-3 text-slate-300">${escapeHtml(String(agent.currentTask??"タスクなし"))}</td><td class="py-2"><span class="${st(agent.status)}">${escapeHtml(tStatus(agent.status??"idle"))}</span></td></tr>`).join("")}</tbody></table></div>`:""}
-          ${thread24h||thread7d||note24h||note7d?`<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">${thread24h?`<div class="metric-card"><div class="metric-label">Threads 24h</div><div class="metric-value">${fn(thread24h.published)} 投稿</div><div class="metric-sub">${fn(thread24h.impressions)} imp / ${fn(thread24h.likes)} いいね</div></div>`:""}${thread7d?`<div class="metric-card"><div class="metric-label">Threads 7日</div><div class="metric-value">${fn(thread7d.published)} 投稿</div><div class="metric-sub">${fn(thread7d.impressions)} imp / ${fn(thread7d.likes)} いいね</div></div>`:""}${note24h?`<div class="metric-card"><div class="metric-label">Note 24h</div><div class="metric-value">${fn(note24h.published)} 記事</div><div class="metric-sub">${fn(note24h.views)} PV / ${fn(note24h.likes)} いいね / ¥${fn(note24h.revenueYen)}</div></div>`:""}${note7d?`<div class="metric-card"><div class="metric-label">Note 7日</div><div class="metric-value">${fn(note7d.published)} 記事</div><div class="metric-sub">${fn(note7d.views)} PV / ${fn(note7d.likes)} いいね / ¥${fn(note7d.revenueYen)}</div></div>`:""}</div>`:""}
-          ${budgets.length?`<div class="panel rounded-2xl p-4"><div class="section-title mb-3">予算概要</div><div class="grid gap-3 lg:grid-cols-3">${budgets.slice(0,3).map(b=>{const tr=pct(b.tokensUsed,b.tokensLimit),cr=pct(b.callsUsed,b.callsLimit),r=Math.max(tr??0,cr??0),fc=r>=.95?"bad":r>=.8?"warn":"good";return`<div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="flex items-center justify-between gap-2"><div><div class="font-semibold text-white">${escapeHtml(String(b.scope??"scope"))}</div><div class="text-xs text-slate-500">${escapeHtml(String(b.period??"heartbeat"))} / ${escapeHtml(String(b.periodKey??""))}</div></div><span class="${r>=.95?"chip chip-bad":r>=.8?"chip chip-warn":"chip chip-good"}">${fp(r)}</span></div><div class="mt-4 space-y-3"><div><div class="flex items-center justify-between text-xs text-slate-500 mb-1"><span>トークン</span><span>${fn(b.tokensUsed)} / ${fn(b.tokensLimit)}</span></div><div class="progress-track"><div class="progress-fill ${fc}" style="width:${Math.min(100,Math.max(0,(tr??0)*100))}%"></div></div></div><div><div class="flex items-center justify-between text-xs text-slate-500 mb-1"><span>呼び出し</span><span>${fn(b.callsUsed)} / ${fn(b.callsLimit)}</span></div><div class="progress-track"><div class="progress-fill ${fc}" style="width:${Math.min(100,Math.max(0,(cr??0)*100))}%"></div></div></div></div></div>`}).join("")}</div></div>`:""}
+          <div class="grid gap-4 xl:grid-cols-2">
+            ${channelSnapshots.map(snapshot=>`<div class="panel rounded-3xl p-5"><div class="flex items-start justify-between gap-3"><div><div class="section-title">${escapeHtml(String(snapshot.label))}</div><div class="section-name mt-2">${escapeHtml(String(snapshot.headline))}</div></div><span class="${st(snapshot.status)}">${escapeHtml(tStatus(snapshot.status))}</span></div><p class="section-subtitle mt-3">${escapeHtml(String(snapshot.summary))}</p><div class="grid gap-3 sm:grid-cols-2 mt-4"><div class="metric-card"><div class="metric-label">24時間</div><div class="metric-value">${fn(snapshot.metrics24h.published)}</div><div class="metric-sub">投稿/公開数 ・ 反応 ${fn(snapshot.metrics24h.likes)}</div><div class="mt-2 text-xs text-slate-500">${snapshot.channel==="note"?`閲覧 ${fn(snapshot.metrics24h.impressionsOrViews)} / 売上 ¥${fn(snapshot.metrics24h.revenueYen)}`:`表示 ${fn(snapshot.metrics24h.impressionsOrViews)}`}</div></div><div class="metric-card"><div class="metric-label">7日間</div><div class="metric-value">${fn(snapshot.metrics7d.published)}</div><div class="metric-sub">投稿/公開数 ・ 反応 ${fn(snapshot.metrics7d.likes)}</div><div class="mt-2 text-xs text-slate-500">${snapshot.channel==="note"?`閲覧 ${fn(snapshot.metrics7d.impressionsOrViews)} / 売上 ¥${fn(snapshot.metrics7d.revenueYen)}`:`表示 ${fn(snapshot.metrics7d.impressionsOrViews)}`}</div></div></div><div class="mt-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">問題</div>${snapshot.blockers.length?`<div class="space-y-2 mt-2">${snapshot.blockers.map(item=>`<div class="border border-white/6 rounded-2xl px-3 py-2 text-sm text-slate-300 bg-white/3">${escapeHtml(String(item))}</div>`).join("")}</div>`:`<p class="text-sm text-slate-500 mt-2">いま大きな問題は見えていない。</p>`}</div><div class="mt-4 border border-cyan-400/15 rounded-2xl px-3 py-3 bg-cyan-400/8"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">次の一手</div><div class="text-sm text-slate-300 mt-2">${escapeHtml(String(snapshot.nextStep))}</div><div class="text-xs text-slate-500 mt-2">最終更新: ${escapeHtml(fd(snapshot.lastActivityAt,"未記録"))}</div></div></div>`).join("")}
+          </div>
+          <div class="panel rounded-3xl p-5">
+            <div class="section-title mb-3">要対応</div>
+            ${userActionItems.length?`<div class="grid gap-3 lg:grid-cols-2">${userActionItems.map(item=>`<div class="stack-card"><div class="stack-card-main"><div><div class="stack-card-title">${escapeHtml(String(item.title))}</div><div class="stack-card-sub">${escapeHtml(String(item.description))}</div></div><div class="stack-card-meta"><span class="${pr(item.level)}">${escapeHtml(item.level==="critical"?"優先度高":"要確認")}</span></div></div></div>`).join("")}</div>`:`<p class="text-sm text-slate-500">今すぐ人が判断する項目はない。</p>`}
         </div>`;
+    }
+
+    /* ── Render: Workstreams ───────────────────────────── */
+    function renderWorkstreams(d){
+      const {s}=norm(d);
+      const list=a(s.workstreamSnapshots??[]);
+      if(!list.length)return'<p class="text-slate-400">運用のまとまり情報はまだありません。</p>';
+      return`<div class="grid gap-4 xl:grid-cols-2">${list.map(item=>`<div class="stack-card"><div class="stack-card-main"><div><div class="stack-card-title">${escapeHtml(String(item.label))}</div><div class="stack-card-sub">${escapeHtml(tLog(String(item.summary??"")).replace(/\n+/g," "))}</div></div><div class="stack-card-meta"><span class="${st(item.status)}">${escapeHtml(tStatus(item.status))}</span></div></div><div class="stack-card-stats"><div><div class="stack-stat-label">担当</div><div class="stack-stat-value">${fn(item.activeAgents)}</div></div><div><div class="stack-stat-label">未処理</div><div class="stack-stat-value">${fn(item.pendingItems)}</div></div><div><div class="stack-stat-label">最終更新</div><div class="stack-stat-value">${escapeHtml(fd(item.lastActivityAt,"未記録"))}</div></div></div><div class="mt-4 text-xs text-slate-500">${escapeHtml((item.departments??[]).join(" / "))}</div>${a(item.blockers).length?`<div class="mt-3 space-y-2">${a(item.blockers).slice(0,3).map(blocker=>`<div class="border border-white/6 rounded-xl px-3 py-2 text-sm text-slate-300 bg-white/3">${escapeHtml(String(blocker))}</div>`).join("")}</div>`:`<div class="mt-3 text-sm text-slate-500">${escapeHtml(item.status==="critical"?"停止や失敗の原因を詳細で確認してほしい。":item.status==="warning"?"軽い停滞や確認待ちがある可能性がある。":"大きな詰まりは見えていない。")}</div>`}</div>`).join("")}</div>`;
     }
 
     /* ── Render: Budget ─────────────────────────────────── */
@@ -455,7 +570,7 @@
     }
 
     /* ── Render: Departments ────────────────────────────── */
-    function renderDepartments(list){if(!list.length)return'<p class="text-slate-400">部署サマリーはまだありません。</p>';return`<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-3 pr-3">部署</th><th class="pb-3 pr-3">状態</th><th class="pb-3 pr-3">最新の動き</th><th class="pb-3 pr-3">最終実行</th><th class="pb-3 pr-3">実行数</th><th class="pb-3"></th></tr></thead><tbody>${list.map(d=>`<tr class="border-b border-white/6"><td class="py-3 pr-3 font-semibold">${escapeHtml(tDept(d.department))}</td><td class="py-3 pr-3"><span class="${d.paused?"chip chip-bad":st(d.recentStatus)}">${escapeHtml(d.paused?"停止中":tStatus(d.recentStatus??"-"))}</span></td><td class="py-3 pr-3 text-slate-300">${escapeHtml(tPhase(d.recentPhase??"-"))}</td><td class="py-3 pr-3 text-slate-400 text-xs">${fd(d.lastRunAt,"-")}</td><td class="py-3 pr-3">${fn(d.totalRuns)}</td><td class="py-3"><button type="button" hx-get="/api/dashboard/departments/${encodeURIComponent(d.department)}" hx-target="#department-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-slate-800/85 hover:bg-slate-700/90 text-slate-100 px-3 py-2 rounded-xl border border-white/6 font-semibold">詳細</button></td></tr>`).join("")}</tbody></table></div>`}
+    function renderDepartments(list){if(!list.length)return'<p class="text-slate-400">部署サマリーはまだありません。</p>';return`<div class="space-y-3">${list.map(d=>`<div class="stack-card"><div class="stack-card-main"><div><div class="stack-card-title">${escapeHtml(String(d.displayName??tDept(d.department)))}</div><div class="stack-card-sub">${escapeHtml(String(d.statusSummary??""))}</div></div><div class="stack-card-meta"><span class="${d.paused?"chip chip-bad":st(d.recentStatus??(d.stale?"warning":"ok"))}">${escapeHtml(d.paused?"停止中":d.stale?"注意":tStatus(d.recentStatus??"ok"))}</span><button type="button" hx-get="/api/dashboard/departments/${encodeURIComponent(d.department)}" hx-target="#department-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-slate-800/85 hover:bg-slate-700/90 text-slate-100 px-3 py-2 rounded-xl border border-white/6 font-semibold">詳細</button></div></div><div class="stack-card-stats"><div><div class="stack-stat-label">最新の動き</div><div class="stack-stat-value">${escapeHtml(tPhase(d.recentPhase??"-"))}</div></div><div><div class="stack-stat-label">最終実行</div><div class="stack-stat-value">${escapeHtml(fd(d.lastRunAt,"未記録"))}</div></div><div><div class="stack-stat-label">実行数</div><div class="stack-stat-value">${fn(d.totalRuns)}</div></div></div>${d.blockingReason?`<div class="mt-3 border border-white/6 rounded-xl px-3 py-2 text-sm text-slate-300 bg-white/3">${escapeHtml(String(d.blockingReason))}</div>`:''}</div>`).join("")}</div>`}
 
     /* ── Render: Agents ─────────────────────────────────── */
     function renderAgents(list){
@@ -468,7 +583,7 @@
           ${Object.entries(byStatus).map(([s,c])=>`<span class="${st(s)}">${escapeHtml(tStatus(s))}: ${c}</span>`).join("")}
         </div>
         <div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-slate-500 border-b border-white/10"><th class="pb-2 pr-3">名前</th><th class="pb-2 pr-3">所属</th><th class="pb-2 pr-3">役割</th><th class="pb-2 pr-3">状態</th><th class="pb-2 pr-3">最終稼働</th><th class="pb-2"></th></tr></thead><tbody class="collapsible-list${collapsed?"":" expanded"}" id="agents-list">
-          ${list.map(ae=>`<tr class="border-b border-white/6"><td class="py-2 pr-3 font-semibold">${escapeHtml(String(ae.name??ae.jobName??""))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tDept(ae.department))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tRole(ae.role))}</td><td class="py-2 pr-3"><span class="${st(ae.status)}">${escapeHtml(tStatus(ae.status??"idle"))}</span></td><td class="py-2 pr-3 text-slate-400 text-xs">${ae.lastActiveAt?fd(ae.lastActiveAt):"-"}</td><td class="py-2"><button type="button" hx-get="/api/dashboard/agents/${encodeURIComponent(ae.id??ae.jobName)}" hx-target="#agent-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-cyan-500/15 hover:bg-cyan-500/22 text-cyan-100 px-2 py-1 rounded-lg border border-cyan-400/20 font-semibold">詳細</button></td></tr>`).join("")}
+          ${list.map(ae=>`<tr class="border-b border-white/6"><td class="py-2 pr-3 font-semibold">${escapeHtml(tAgentName(ae.name??ae.jobName??""))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tDept(ae.department))}</td><td class="py-2 pr-3 text-slate-400">${escapeHtml(tRole(ae.role))}</td><td class="py-2 pr-3"><span class="${st(ae.status)}">${escapeHtml(tStatus(ae.status??"idle"))}</span></td><td class="py-2 pr-3 text-slate-400 text-xs">${ae.lastActiveAt?fd(ae.lastActiveAt):"-"}</td><td class="py-2"><button type="button" hx-get="/api/dashboard/agents/${encodeURIComponent(ae.id??ae.jobName)}" hx-target="#agent-detail-content" hx-swap="innerHTML" class="ghost-button text-xs bg-cyan-500/15 hover:bg-cyan-500/22 text-cyan-100 px-2 py-1 rounded-lg border border-cyan-400/20 font-semibold">詳細</button></td></tr>`).join("")}
         </tbody></table></div>
         ${collapsed?`<button type="button" onclick="document.getElementById('agents-list').classList.toggle('expanded');this.textContent=this.textContent==='すべて表示'?'折りたたむ':'すべて表示'" class="ghost-button text-xs bg-slate-800/80 px-3 py-2 rounded-xl mt-3 border border-white/6">すべて表示</button>`:""}`;
     }
@@ -511,12 +626,141 @@
     /* ── Render: Department Detail ────────────────────────── */
     function renderDepartmentDetail(data){
       const signals=data?.signals??{};const proposals=a(data?.proposals??[]);const agents=a(data?.agents??[]);const importantAlerts=a(data?.importantAlerts??[]);const controls=a(data?.controls??[]);
-      return`<div class="space-y-4"><div class="flex items-start justify-between gap-3"><div><div class="section-title">部署の詳細</div><div class="text-xl font-bold text-white mt-2">${escapeHtml(tDept(data?.department))}</div><div class="text-sm text-slate-400 mt-1">${escapeHtml(String(data?.currentTheme??"未設定"))}</div></div><span class="${data?.paused?"chip chip-bad":"chip chip-good"}">${escapeHtml(String(data?.paused?"停止中":"稼働中"))}</span></div><div class="panel rounded-2xl p-4"><div class="text-sm text-slate-300 leading-6">${escapeHtml(String(data?.currentPolicy??"方針未設定"))}</div><div class="mt-3 content-row"><span class="chip chip-neutral">実行 ${fn(data?.runs?.length??0)}</span><span class="chip chip-neutral">担当者 ${fn(agents.length)}</span><span class="chip chip-neutral">提案 ${fn(proposals.length)}</span><span class="chip chip-neutral">アラート ${fn(importantAlerts.length)}</span></div></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">入力</div><div class="mt-2 space-y-2">${a(signals.inputs).length?a(signals.inputs).slice(0,5).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">入力情報なし</p>'}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">出力</div><div class="mt-2 space-y-2">${a(signals.outputs).length?a(signals.outputs).slice(0,5).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">出力成果物なし</p>'}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">停滞事項</div><div class="mt-2 space-y-2">${a(signals.blockers).length?a(signals.blockers).slice(0,5).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">停滞事項なし</p>'}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">確認事項 / 優先タスク</div><div class="mt-2 space-y-2">${a(signals.questions).length?a(signals.questions).slice(0,3).map(item=>`<div class="text-sm text-slate-200 border border-white/6 rounded-xl bg-white/3 p-2">${escapeHtml(String(item))}</div>`).join(""):'<p class="text-slate-400">要確認事項なし</p>'}${a(signals.priorityTasks).length?`<div class="mt-3 space-y-2">${a(signals.priorityTasks).slice(0,3).map(item=>`<div class="text-sm text-cyan-100 border border-cyan-400/15 rounded-xl bg-cyan-400/8 p-2">${escapeHtml(String(item))}</div>`).join("")}</div>`:""}</div></div></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">停止 / 再開</div><div class="flex flex-wrap gap-2"><button type="button" hx-post="/api/dashboard/control/departments/${encodeURIComponent(data?.department??"")}/pause" hx-target="#department-action-result" hx-swap="innerHTML" class="ghost-button text-xs bg-rose-500/15 hover:bg-rose-500/22 text-rose-100 px-3 py-2 rounded-xl border border-rose-400/20 font-semibold">停止</button><button type="button" hx-post="/api/dashboard/control/departments/${encodeURIComponent(data?.department??"")}/resume" hx-target="#department-action-result" hx-swap="innerHTML" class="ghost-button text-xs bg-emerald-500/15 hover:bg-emerald-500/22 text-emerald-100 px-3 py-2 rounded-xl border border-emerald-400/20 font-semibold">再開</button></div><div id="department-action-result" class="text-sm text-slate-300 mt-3"></div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">HB / 担当者ディレクティブ</div><form hx-post="/api/dashboard/control/directives" hx-target="#department-action-result" hx-swap="innerHTML" class="space-y-3"><input type="hidden" name="scope" value="${escapeHtml(String(data?.department??"global"))}" /><div class="grid gap-3 sm:grid-cols-2"><select name="target" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"><option value="next_heartbeat">次回HB重点</option><option value="assignee">担当者指示</option></select><select name="priority" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select></div><div class="grid gap-3 sm:grid-cols-2"><input type="text" name="department" value="${escapeHtml(String(data?.department??""))}" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" placeholder="部署" /><input type="text" name="agentId" placeholder="エージェントID" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" /></div><textarea name="content" rows="3" class="w-full bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" placeholder="次回HBで何を優先するか / 誰に何を指示するかを一文で書く"></textarea><button type="submit" class="ghost-button text-xs bg-cyan-500/15 hover:bg-cyan-500/22 text-cyan-100 px-3 py-2 rounded-xl border border-cyan-400/20 font-semibold">送信</button></form></div></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">保留中の提案</div>${proposals.length?`<div class="space-y-2">${proposals.slice(0,4).map(item=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(item.priority??"medium"))}</span><span class="${st(item.status)}">${escapeHtml(String(item.status??"pending"))}</span></div><div class="mt-2 text-sm text-slate-200">${escapeHtml(String(item.title))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">未処理提案なし</p>`}</div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">稼働中の担当者</div>${agents.length?`<div class="space-y-2">${agents.slice(0,4).map(agent=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="flex items-center justify-between gap-3"><div><div class="font-semibold text-white">${escapeHtml(String(agent.name??agent.jobName))}</div><div class="text-xs text-slate-500 mt-1">${escapeHtml(String(agent.role??"-"))}</div></div><span class="${st(agent.status)}">${escapeHtml(String(agent.status??"idle"))}</span></div><div class="mt-2 text-sm text-slate-300">${escapeHtml(String(agent.currentTask??"現在タスクなし"))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">担当者なし</p>`}</div></div>${importantAlerts.length?`<div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">重要アラート</div><div class="space-y-2">${importantAlerts.map(alert=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(alert.type??"alert"))}</span><span class="text-xs text-slate-500">${fd(alert.createdAt,"-")}</span></div><div class="text-sm text-slate-200 mt-2">${escapeHtml(String(alert.reason??"-"))}</div></div>`).join("")}</div></div>`:""}</div>`}
+      return`<div class="detail-shell">
+        <div class="detail-hero">
+          <div>
+            <div class="section-title">部署の詳細</div>
+            <div class="section-name">${escapeHtml(tDept(data?.department))}</div>
+            <div class="section-subtitle">${escapeHtml(String(data?.currentTheme??"未設定"))}</div>
+          </div>
+          <span class="${data?.paused?"chip chip-bad":"chip chip-good"}">${escapeHtml(String(data?.paused?"停止中":"稼働中"))}</span>
+        </div>
+          <div class="detail-summary">
+          <div class="detail-summary-copy">${escapeHtml(humanizeDetailText(data?.currentPolicy??"方針未設定"))}</div>
+          <div class="detail-stats">
+            <div class="detail-stat"><div class="detail-stat-label">実行回数</div><div class="detail-stat-value">${fn(data?.runs?.length??0)}</div><div class="detail-stat-copy">直近で確認できる部署実行</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">担当者</div><div class="detail-stat-value">${fn(agents.length)}</div><div class="detail-stat-copy">この部署に紐づく担当者数</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">保留提案</div><div class="detail-stat-value">${fn(proposals.length)}</div><div class="detail-stat-copy">人の判断待ちの提案</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">重要アラート</div><div class="detail-stat-value">${fn(importantAlerts.length)}</div><div class="detail-stat-copy">先に見たい停止や注意</div></div>
+          </div>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-card">
+            <div class="detail-card-title">入力</div>
+            <div class="detail-card-subtitle">この部署が判断材料として見ている情報</div>
+            <div class="detail-list">${a(signals.inputs).length?a(signals.inputs).slice(0,5).map(item=>`<div class="detail-item">${escapeHtml(humanizeDetailText(item))}</div>`).join(""):`<div class="detail-item detail-item-muted">入力情報なし</div>`}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-title">出力</div>
+            <div class="detail-card-subtitle">最近出している成果やサマリー</div>
+            <div class="detail-list">${a(signals.outputs).length?a(signals.outputs).slice(0,5).map(item=>`<div class="detail-item">${escapeHtml(humanizeDetailText(item))}</div>`).join(""):`<div class="detail-item detail-item-muted">出力成果物なし</div>`}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-title">停滞事項</div>
+            <div class="detail-card-subtitle">止まりやすい箇所だけ先に見えるようにする</div>
+            <div class="detail-list">${a(signals.blockers).length?a(signals.blockers).slice(0,5).map(item=>`<div class="detail-item detail-item-warn">${escapeHtml(humanizeDetailText(item))}</div>`).join(""):`<div class="detail-item detail-item-muted">停滞事項なし</div>`}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-title">確認事項 / 優先タスク</div>
+            <div class="detail-card-subtitle">人が判断したいことと、次に回したい仕事</div>
+            <div class="detail-list">
+              ${a(signals.questions).length?a(signals.questions).slice(0,3).map(item=>`<div class="detail-item">${escapeHtml(humanizeDetailText(item))}</div>`).join(""):`<div class="detail-item detail-item-muted">要確認事項なし</div>`}
+              ${a(signals.priorityTasks).length?a(signals.priorityTasks).slice(0,3).map(item=>`<div class="detail-item detail-item-accent">${escapeHtml(humanizeDetailText(item))}</div>`).join(""):""}
+            </div>
+          </div>
+        </div>
+        <div class="detail-action-grid">
+          <div class="detail-card">
+            <div class="detail-card-title">停止 / 再開</div>
+            <div class="detail-card-subtitle">この部署だけを止めたり再開したりする</div>
+            <div class="detail-pill-row">
+              <button type="button" hx-post="/api/dashboard/control/departments/${encodeURIComponent(data?.department??"")}/pause" hx-target="#department-action-result" hx-swap="innerHTML" class="ghost-button text-xs bg-rose-500/15 hover:bg-rose-500/22 text-rose-100 px-3 py-2 rounded-xl border border-rose-400/20 font-semibold">停止</button>
+              <button type="button" hx-post="/api/dashboard/control/departments/${encodeURIComponent(data?.department??"")}/resume" hx-target="#department-action-result" hx-swap="innerHTML" class="ghost-button text-xs bg-emerald-500/15 hover:bg-emerald-500/22 text-emerald-100 px-3 py-2 rounded-xl border border-emerald-400/20 font-semibold">再開</button>
+            </div>
+            <div id="department-action-result" class="text-sm text-slate-300 mt-3"></div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-title">次回の優先メモ</div>
+            <div class="detail-card-subtitle">次回の定期チェックや担当者が、何を優先して動くかをここで伝える</div>
+            <form hx-post="/api/dashboard/control/directives" hx-target="#department-action-result" hx-swap="innerHTML" class="space-y-3 mt-4">
+              <input type="hidden" name="scope" value="${escapeHtml(String(data?.department??"global"))}" />
+              <div class="detail-form-grid">
+                <select name="target" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"><option value="next_heartbeat">次回の定期チェックで優先</option><option value="assignee">担当者への指示</option></select>
+                <select name="priority" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400"><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select>
+              </div>
+              <div class="detail-form-grid">
+                <input type="text" name="department" value="${escapeHtml(String(data?.department??""))}" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" placeholder="部署名" />
+                <input type="text" name="agentId" placeholder="担当者ID (必要なら)" class="bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" />
+              </div>
+              <textarea name="content" rows="3" class="w-full bg-slate-950/70 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-cyan-400" placeholder="例: 次回は競合リサーチを先に終えてから投稿案を作る"></textarea>
+              <button type="submit" class="ghost-button text-xs bg-cyan-500/15 hover:bg-cyan-500/22 text-cyan-100 px-3 py-2 rounded-xl border border-cyan-400/20 font-semibold">メモを反映</button>
+            </form>
+          </div>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-card">
+            <div class="detail-card-title">保留中の提案</div>
+            <div class="detail-card-subtitle">この部署で人の判断待ちになっているもの</div>
+            <div class="detail-list">${proposals.length?proposals.slice(0,4).map(item=>`<div class="detail-item"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(item.priority??"medium"))}</span><span class="${st(item.status)}">${escapeHtml(tStatus(item.status??"pending"))}</span></div><div class="mt-2"><strong>${escapeHtml(humanizeDetailText(item.title))}</strong></div></div>`).join(""):`<div class="detail-item detail-item-muted">未処理提案なし</div>`}</div>
+          </div>
+          <div class="detail-card">
+            <div class="detail-card-title">稼働中の担当者</div>
+            <div class="detail-card-subtitle">この部署でいま動いている担当者</div>
+            <div class="detail-list">${agents.length?agents.slice(0,4).map(agent=>`<div class="detail-item"><div class="flex items-center justify-between gap-3"><div><strong>${escapeHtml(String(agent.name??agent.jobName))}</strong><div class="detail-note">${escapeHtml(tRole(agent.role??"-"))}</div></div><span class="${st(agent.status)}">${escapeHtml(tStatus(agent.status??"idle"))}</span></div><div class="mt-2">${escapeHtml(humanizeDetailText(agent.currentTask??"現在タスクなし"))}</div></div>`).join(""):`<div class="detail-item detail-item-muted">担当者なし</div>`}</div>
+          </div>
+        </div>
+        ${importantAlerts.length?`<div class="detail-card"><div class="detail-card-title">重要アラート</div><div class="detail-card-subtitle">止まりや失敗の原因を確認するための一覧</div><div class="detail-list">${importantAlerts.map(alert=>`<div class="detail-item detail-item-bad"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(alert.type??"alert"))}</span><span class="text-xs text-slate-500">${fd(alert.createdAt,"-")}</span></div><div class="mt-2">${escapeHtml(String(alert.reason??"-"))}</div></div>`).join("")}</div></div>`:""}
+      </div>`}
 
     /* ── Render: Agent Detail ──────────────────────────────── */
     function renderAgentDetail(data){
       const agent=data??{};const recentProposals=a(agent.recentProposals??[]);
-      return`<div class="space-y-4"><div class="flex items-start justify-between gap-3"><div><div class="section-title">エージェントの詳細</div><div class="text-xl font-bold text-white mt-2">${escapeHtml(String(agent.name??agent.jobName??""))}</div><div class="text-sm text-slate-400 mt-1">${escapeHtml(tDept(agent.department))} / ${escapeHtml(tRole(agent.role))}</div></div><span class="${st(agent.status)}">${escapeHtml(tStatus(agent.status??"idle"))}</span></div><div class="grid gap-3 md:grid-cols-2"><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">現在タスク</div><div class="mt-2 text-slate-200 leading-6">${escapeHtml(String(agent.currentTask??"-"))}</div><div class="mt-3 content-row"><span class="chip chip-neutral">トークン ${fn(agent.budgetUsedTokens??0)}</span><span class="chip chip-neutral">呼び出し ${fn(agent.budgetUsedCalls??0)}</span>${agent.lastActiveAt?`<span class="chip chip-neutral">最終稼働 ${fd(agent.lastActiveAt)}</span>`:""}</div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="text-xs text-slate-500 uppercase tracking-[0.16em] font-bold">最終完了タスク</div><div class="mt-2 text-slate-200 leading-6">${escapeHtml(String(agent.lastCompletedTask??"-"))}</div><div class="mt-3 content-row">${agent.locked?`<span class="chip chip-warn">ロック中</span>`:""} ${agent.lockedBy?`<span class="chip chip-neutral">ロック者 ${escapeHtml(String(agent.lockedBy))}</span>`:""} ${agent.nextNotificationAt?`<span class="chip chip-info">次回通知 ${fd(agent.nextNotificationAt)}</span>`:""}</div></div></div><div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">最近の提案</div>${recentProposals.length?`<div class="space-y-2">${recentProposals.slice(0,5).map(item=>`<div class="border border-white/6 rounded-xl bg-white/3 p-3"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(String(item.department??"-"))}</span><span class="${st(item.status)}">${escapeHtml(String(item.status??"pending"))}</span></div><div class="mt-2 text-sm text-slate-200">${escapeHtml(String(item.title))}</div><div class="mt-1 text-xs text-slate-500">${escapeHtml(String(item.currentStage??"-"))}</div></div>`).join("")}</div>`:`<p class="text-slate-400">提案履歴なし</p>`}</div>${agent.budget?`<div class="bg-slate-950/70 border border-white/8 rounded-2xl p-4"><div class="section-title mb-3">部署予算</div><div class="text-sm text-slate-300">スコープ: ${escapeHtml(String(agent.budget.scope??"-"))}</div><div class="mt-2 content-row"><span class="chip chip-neutral">残トークン ${fn(agent.budget.tokensRemaining)}</span><span class="chip chip-neutral">残呼び出し ${fn(agent.budget.callsRemaining)}</span><span class="chip ${agent.budget.utilization>.85?"chip-bad":"chip-good"}">${fp(agent.budget.utilization)}</span></div></div>`:""}</div>`}
+      return`<div class="detail-shell">
+        <div class="detail-hero">
+          <div>
+            <div class="section-title">エージェントの詳細</div>
+            <div class="section-name">${escapeHtml(String(agent.name??agent.jobName??""))}</div>
+            <div class="section-subtitle">${escapeHtml(tDept(agent.department))} / ${escapeHtml(tRole(agent.role))}</div>
+          </div>
+          <span class="${st(agent.status)}">${escapeHtml(tStatus(agent.status??"idle"))}</span>
+        </div>
+        <div class="detail-summary">
+          <div class="detail-summary-copy">${escapeHtml(String(agent.currentTask??"現在タスクなし"))}</div>
+          <div class="detail-stats">
+            <div class="detail-stat"><div class="detail-stat-label">現在タスク</div><div class="detail-stat-value">${escapeHtml(humanizeDetailText(agent.currentTask??"待機中"))}</div><div class="detail-stat-copy">いま進めている作業</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">最終完了</div><div class="detail-stat-value">${escapeHtml(humanizeDetailText(agent.lastCompletedTask??"未記録"))}</div><div class="detail-stat-copy">最後に終わった仕事</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">使用トークン</div><div class="detail-stat-value">${fn(agent.budgetUsedTokens??0)}</div><div class="detail-stat-copy">この担当者が使った量</div></div>
+            <div class="detail-stat"><div class="detail-stat-label">呼び出し回数</div><div class="detail-stat-value">${fn(agent.budgetUsedCalls??0)}</div><div class="detail-stat-copy">${agent.lastActiveAt?`最終稼働 ${fd(agent.lastActiveAt)}`:"最終稼働は未記録"}</div></div>
+          </div>
+        </div>
+        <div class="detail-grid">
+          <div class="detail-card">
+            <div class="detail-card-title">状態メモ</div>
+            <div class="detail-card-subtitle">ロックや通知など、今の状態を横並びで確認する</div>
+            <div class="detail-pill-row">
+              ${agent.locked?`<span class="chip chip-warn">ロック中</span>`:`<span class="chip chip-good">ロックなし</span>`}
+              ${agent.lockedBy?`<span class="chip chip-neutral">ロック者 ${escapeHtml(String(agent.lockedBy))}</span>`:""}
+              ${agent.nextNotificationAt?`<span class="chip chip-info">次回通知 ${fd(agent.nextNotificationAt)}</span>`:""}
+              ${agent.lastActiveAt?`<span class="chip chip-neutral">最終稼働 ${fd(agent.lastActiveAt)}</span>`:""}
+            </div>
+          </div>
+          ${agent.budget?`<div class="detail-card">
+            <div class="detail-card-title">部署予算</div>
+            <div class="detail-card-subtitle">この担当者が属する部署の残量</div>
+            <div class="detail-stats" style="margin-top:.9rem;grid-template-columns:repeat(3,minmax(0,1fr));">
+              <div class="detail-stat"><div class="detail-stat-label">スコープ</div><div class="detail-stat-value">${escapeHtml(String(agent.budget.scope??"-"))}</div><div class="detail-stat-copy">予算の対象範囲</div></div>
+              <div class="detail-stat"><div class="detail-stat-label">残トークン</div><div class="detail-stat-value">${fn(agent.budget.tokensRemaining)}</div><div class="detail-stat-copy">まだ使える量</div></div>
+              <div class="detail-stat"><div class="detail-stat-label">残呼び出し</div><div class="detail-stat-value">${fn(agent.budget.callsRemaining)}</div><div class="detail-stat-copy">利用可能回数</div></div>
+            </div>
+            <div class="detail-note">使用率 ${fp(agent.budget.utilization)}</div>
+          </div>`:""}
+        </div>
+        <div class="detail-card">
+          <div class="detail-card-title">最近の提案</div>
+          <div class="detail-card-subtitle">この担当者が関わった提案だけを確認する</div>
+          <div class="detail-list">${recentProposals.length?recentProposals.slice(0,5).map(item=>`<div class="detail-item"><div class="content-row"><span class="chip chip-neutral">${escapeHtml(tDept(item.department??"-"))}</span><span class="${st(item.status)}">${escapeHtml(tStatus(item.status??"pending"))}</span></div><div class="mt-2"><strong>${escapeHtml(humanizeDetailText(item.title))}</strong></div><div class="detail-note">${escapeHtml(humanizeDetailText(item.currentStage??"-"))}</div></div>`).join(""):`<div class="detail-item detail-item-muted">提案履歴なし</div>`}</div>
+        </div>
+      </div>`}
 
     /* ── Render: Notice ────────────────────────────────────── */
     function renderNotice(data){const payload=typeof data==="string"?data:JSON.stringify(data,null,2);return`<pre class="whitespace-pre-wrap rounded-2xl border border-white/8 bg-slate-950/75 p-4 text-sm text-slate-200">${escapeHtml(payload)}</pre>`}
@@ -527,7 +771,8 @@
       let data;try{data=JSON.parse(text)}catch{return}
       if(!target?.id)return;
       if(target.id==="summary-content")evt.detail.serverResponse=renderSummary(data);
-      else if(target.id==="budget-content")evt.detail.serverResponse=renderBudget(data);
+      else if(target.id==="overview-workstreams-content")evt.detail.serverResponse=renderWorkstreams(data);
+      else if(target.id==="telemetry-budget-content")evt.detail.serverResponse=renderBudget(data);
       else if(target.id==="departments-content")evt.detail.serverResponse=renderDepartments(data);
       else if(target.id==="agents-content")evt.detail.serverResponse=renderAgents(data);
       else if(target.id==="reviews-content")evt.detail.serverResponse=renderReviews(data);

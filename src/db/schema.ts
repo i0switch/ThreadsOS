@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   real,
   sqliteTable,
@@ -228,10 +229,16 @@ export const channelPerformanceSnapshots = sqliteTable(
 export const notePostResults = sqliteTable("note_post_results", {
   id: text("id").primaryKey(),
   draftId: text("draft_id").notNull(),
+  title: text("title"),
   noteUrl: text("note_url"),
+  priceYen: integer("price_yen"),
   views: integer("views").notNull().default(0),
   likes: integer("likes").notNull().default(0),
   commentsCount: integer("comments_count").notNull().default(0),
+  purchasesCount: integer("purchases_count").notNull().default(0),
+  revenueYen: integer("revenue_yen").notNull().default(0),
+  conversionRate: real("conversion_rate").notNull().default(0),
+  trafficSource: text("traffic_source"),
   publishedAt: text("published_at").notNull(),
   createdAt: text("created_at").notNull(),
 });
@@ -291,16 +298,25 @@ export const competitorSnapshots = sqliteTable("competitor_snapshots", {
   createdAt: text("created_at").notNull(),
 });
 
-export const scheduledJobRuns = sqliteTable("scheduled_job_runs", {
-  id: text("id").primaryKey(),
-  jobName: text("job_name").notNull(),
-  status: text("status").notNull(),
-  startedAt: text("started_at").notNull(),
-  finishedAt: text("finished_at"),
-  dryRun: integer("dry_run").notNull().default(0),
-  resultSummary: text("result_summary"),
-  createdAt: text("created_at").notNull(),
-});
+export const scheduledJobRuns = sqliteTable(
+  "scheduled_job_runs",
+  {
+    id: text("id").primaryKey(),
+    jobName: text("job_name").notNull(),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    dryRun: integer("dry_run").notNull().default(0),
+    resultSummary: text("result_summary"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    jobStartedIdx: index("scheduled_job_runs_job_started_idx").on(
+      table.jobName,
+      table.startedAt,
+    ),
+  }),
+);
 
 export const strategyStates = sqliteTable("strategy_states", {
   key: text("key").primaryKey(),
@@ -324,16 +340,247 @@ export const executiveCycles = sqliteTable("executive_cycles", {
   createdAt: text("created_at").notNull(),
 });
 
-export const departmentRuns = sqliteTable("department_runs", {
+export const departmentRuns = sqliteTable(
+  "department_runs",
+  {
+    id: text("id").primaryKey(),
+    cycleId: text("cycle_id").notNull(),
+    department: text("department").notNull(),
+    phase: text("phase").notNull(),
+    status: text("status").notNull(),
+    summary: text("summary").notNull(),
+    payloadJson: text("payload_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    departmentCreatedIdx: index("department_runs_department_created_idx").on(
+      table.department,
+      table.createdAt,
+    ),
+  }),
+);
+
+// Phase 2: Memory, Agent, Budget, KPI, Department, SystemControl tables
+
+export const MEMORY_LAYERS = [
+  "persistent_policy",
+  "department_summary",
+  "event_log",
+  "working_memory",
+  "kpi_snapshot",
+] as const;
+
+export const AGENT_STATUSES = [
+  "idle",
+  "working",
+  "proposing",
+  "awaiting_approval",
+  "paused",
+] as const;
+
+export const PROPOSAL_PRIORITIES = [
+  "low",
+  "medium",
+  "high",
+  "critical",
+] as const;
+
+export const PROPOSAL_STATUSES = [
+  "pending",
+  "reviewing",
+  "approved",
+  "rejected",
+  "executed",
+] as const;
+export const PROPOSAL_STAGES = [
+  "leader_review",
+  "executive_review",
+  "human_review",
+  "approved",
+  "rejected",
+  "executed",
+] as const;
+
+export const BUDGET_PERIODS = ["heartbeat", "daily"] as const;
+
+export const KPI_PERIOD_TYPES = ["hourly", "daily", "weekly"] as const;
+
+export const KPI_CHANNELS = ["threads", "note", "operations"] as const;
+
+export const DEPARTMENT_SUMMARY_TYPES = [
+  "daily",
+  "weekly",
+  "win_pattern",
+  "fail_pattern",
+  "decision",
+] as const;
+
+export const SYSTEM_CONTROL_ACTIONS = ["pause", "resume", "stop"] as const;
+
+export const memoryEntries = sqliteTable(
+  "memory_entries",
+  {
+    id: text("id").primaryKey(),
+    layer: text("layer").notNull(),
+    scope: text("scope").notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    version: integer("version").notNull().default(1),
+    expiresAt: text("expires_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    layerScopeKeyUniq: uniqueIndex("memory_entries_layer_scope_key_unique").on(
+      table.layer,
+      table.scope,
+      table.key,
+    ),
+  }),
+);
+
+export const agentStates = sqliteTable("agent_states", {
   id: text("id").primaryKey(),
-  cycleId: text("cycle_id").notNull(),
+  name: text("name").notNull(),
   department: text("department").notNull(),
-  phase: text("phase").notNull(),
-  status: text("status").notNull(),
-  summary: text("summary").notNull(),
-  payloadJson: text("payload_json"),
+  role: text("role").notNull(),
+  status: text("status").notNull().default("idle"),
+  currentTask: text("current_task"),
+  lastCompletedTask: text("last_completed_task"),
+  budgetUsedTokens: integer("budget_used_tokens").notNull().default(0),
+  budgetUsedCalls: integer("budget_used_calls").notNull().default(0),
+  lastActiveAt: text("last_active_at"),
   createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });
+
+export const proposals = sqliteTable(
+  "proposals",
+  {
+    id: text("id").primaryKey(),
+    agentId: text("agent_id").notNull(),
+    leaderAgentId: text("leader_agent_id"),
+    executiveAgentId: text("executive_agent_id"),
+    department: text("department").notNull(),
+    title: text("title").notNull(),
+    description: text("description").notNull(),
+    reason: text("reason").notNull(),
+    evidence: text("evidence").notNull(),
+    expectedEffect: text("expected_effect").notNull(),
+    risk: text("risk"),
+    priority: text("priority").notNull().default("medium"),
+    status: text("status").notNull().default("pending"),
+    currentStage: text("current_stage").notNull().default("human_review"),
+    currentApproverId: text("current_approver_id"),
+    reviewerNote: text("reviewer_note"),
+    reviewedAt: text("reviewed_at"),
+    executedAt: text("executed_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    proposalStatusDepartmentIdx: index(
+      "proposals_status_department_created_idx",
+    ).on(table.status, table.department, table.createdAt),
+  }),
+);
+
+export const proposalEvents = sqliteTable(
+  "proposal_events",
+  {
+    id: text("id").primaryKey(),
+    proposalId: text("proposal_id").notNull(),
+    stage: text("stage").notNull(),
+    action: text("action").notNull(),
+    actorId: text("actor_id").notNull(),
+    note: text("note"),
+    metadataJson: text("metadata_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    proposalCreatedIdx: index("proposal_events_proposal_created_idx").on(
+      table.proposalId,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const budgetTracking = sqliteTable(
+  "budget_tracking",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull(),
+    period: text("period").notNull(),
+    periodKey: text("period_key").notNull(),
+    tokensUsed: integer("tokens_used").notNull().default(0),
+    callsUsed: integer("calls_used").notNull().default(0),
+    tokensLimit: integer("tokens_limit").notNull(),
+    callsLimit: integer("calls_limit").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    scopePeriodKeyUniq: uniqueIndex(
+      "budget_tracking_scope_period_key_unique",
+    ).on(table.scope, table.period, table.periodKey),
+  }),
+);
+
+export const kpiSnapshots = sqliteTable(
+  "kpi_snapshots",
+  {
+    id: text("id").primaryKey(),
+    channel: text("channel").notNull(),
+    metricName: text("metric_name").notNull(),
+    metricValue: real("metric_value").notNull(),
+    periodType: text("period_type").notNull(),
+    periodKey: text("period_key").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    channelMetricPeriodUniq: uniqueIndex(
+      "kpi_snapshots_channel_metric_period_unique",
+    ).on(table.channel, table.metricName, table.periodType, table.periodKey),
+  }),
+);
+
+export const departmentSummaries = sqliteTable(
+  "department_summaries",
+  {
+    id: text("id").primaryKey(),
+    department: text("department").notNull(),
+    summaryType: text("summary_type").notNull(),
+    content: text("content").notNull(),
+    periodKey: text("period_key").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    deptSummaryPeriodUniq: uniqueIndex(
+      "department_summaries_dept_type_period_unique",
+    ).on(table.department, table.summaryType, table.periodKey),
+  }),
+);
+
+export const systemControls = sqliteTable(
+  "system_controls",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull(),
+    action: text("action").notNull(),
+    reason: text("reason").notNull(),
+    createdBy: text("created_by").notNull().default("system"),
+    active: integer("active").notNull().default(1),
+    createdAt: text("created_at").notNull(),
+    resolvedAt: text("resolved_at"),
+  },
+  (table) => ({
+    controlScopeActionIdx: index("system_controls_scope_action_active_idx").on(
+      table.scope,
+      table.action,
+      table.active,
+    ),
+  }),
+);
 
 export const humanReviewItems = sqliteTable(
   "human_review_items",
