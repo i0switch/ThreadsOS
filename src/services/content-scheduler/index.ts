@@ -30,7 +30,8 @@ export type ActionType =
   | "generate_note"
   | "optimize_schedule"
   | "weekly_retro"
-  | "notify";
+  | "notify"
+  | "analyze_competitors";
 
 export interface ScheduledAction {
   type: ActionType;
@@ -441,6 +442,31 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
         type: "research_note",
         priority: 8,
         reason: `前回noteリサーチから${Math.floor(noteResearchAge)}時間経過`,
+      });
+    }
+
+    // 競合分析: 週1回 or スナップショットが5件以上溜まって未分析
+    const lastCompetitorAnalysis = db
+      .select()
+      .from(scheduledJobRuns)
+      .where(
+        and(
+          eq(scheduledJobRuns.jobName, "competitor-analysis"),
+          eq(scheduledJobRuns.status, "completed"),
+        ),
+      )
+      .orderBy(desc(scheduledJobRuns.startedAt))
+      .limit(1)
+      .get();
+    const competitorAnalysisAge = lastCompetitorAnalysis
+      ? hoursBetween(now, lastCompetitorAnalysis.startedAt)
+      : Number.POSITIVE_INFINITY;
+    if (competitorAnalysisAge >= 168) {
+      // 168時間 = 7日
+      actions.push({
+        type: "analyze_competitors",
+        priority: 9,
+        reason: `前回競合分析から${Math.floor(competitorAnalysisAge / 24)}日経過`,
       });
     }
 

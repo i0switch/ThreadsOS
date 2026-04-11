@@ -54,6 +54,7 @@ export interface OrchestrationService {
     llm: LlmClient,
     storage: StorageClient,
     dryRun?: boolean,
+    noteThemeContext?: string,
   ): Promise<string>;
   runPostPublishFollowup(
     api: ThreadsApiClient,
@@ -270,6 +271,24 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     return selected;
   }
 
+  private async buildThreadsStrategyFromNoteThemes(
+    limit = 3,
+  ): Promise<string> {
+    const noteTopics = await this.selectNotePipelineTopics(limit);
+    if (noteTopics.length === 0) {
+      return "";
+    }
+
+    return [
+      "## note起点の集客テーマ",
+      ...noteTopics.map(
+        (topic, index) =>
+          `${index + 1}. ${topic.name} (${topic.niche}) / priority=${topic.priorityScore} / performance=${topic.performanceScore.toFixed(3)}`,
+      ),
+      "Threads投稿は上記テーマの記事化と収益化につながる導線を優先すること。",
+    ].join("\n");
+  }
+
   async processHumanInputs(
     _llm: LlmClient,
     storage: StorageClient,
@@ -473,6 +492,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     llm: LlmClient,
     storage: StorageClient,
     dryRun = false,
+    noteThemeContext?: string,
   ): Promise<string> {
     logger.info({ dryRun }, "Starting daily threads plan");
 
@@ -484,6 +504,9 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     const date = new Date().toISOString().split("T")[0];
 
     const insightsSummary = this.getImprovementInsightsSummary();
+    const resolvedNoteThemeContext =
+      noteThemeContext ??
+      (await this.buildThreadsStrategyFromNoteThemes(3));
 
     for (const topic of topics) {
       if (dryRun) {
@@ -509,6 +532,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
         5,
         llm,
         insightsSummary,
+        resolvedNoteThemeContext,
       );
       totalDrafts += drafts.length;
 
@@ -632,7 +656,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     const report = await this.engagementService.generateWeeklyReport(llm);
     this.memoryService.set(
       "department_summary",
-      "optimization",
+      "threads",
       "weekly-retro",
       report,
     );

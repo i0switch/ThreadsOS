@@ -7,9 +7,14 @@ import {
 } from "../../adapters/web-search/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
-import { competitorSnapshots, researchItems } from "../../db/schema.js";
+import {
+  competitorAnalyses,
+  competitorSnapshots,
+  departmentNotifications,
+  researchItems,
+} from "../../db/schema.js";
 import type { ResearchItem } from "../../domain/threads/index.js";
-import { parseJsonArray } from "../../utils/llm-json.js";
+import { parseJsonArray, parseJsonObject } from "../../utils/llm-json.js";
 import { createMemoryService } from "../memory/index.js";
 import { ProfileContextServiceImpl } from "../profile-context/index.js";
 import { createRetrievalService } from "../retrieval/index.js";
@@ -28,6 +33,14 @@ export interface ResearchService {
   ): Promise<
     Array<{ id: string; source: string; data: string; snapshotDate: string }>
   >;
+  analyzeCompetitorSnapshots(
+    llm: LlmClient,
+    channel: "threads" | "note",
+  ): Promise<{
+    analysisCount: number;
+    winningPatterns: string[];
+    summary: string;
+  }>;
 }
 
 export class ResearchServiceImpl implements ResearchService {
@@ -50,7 +63,7 @@ export class ResearchServiceImpl implements ResearchService {
       ? `\n## 運用者プロフィール\n${profileText}\n(このジャンル・トーンに特化したリサーチを行ってください。)`
       : "";
     const retrievalContext = this.retrievalService.buildContext(topicName, {
-      scope: "research",
+      scope: "external-research",
       limit: 6,
     });
     const retrievalSection = retrievalContext
@@ -165,19 +178,43 @@ ${topicName}
     if (summaryForMemory) {
       this.memoryService.set(
         "department_summary",
-        "research",
+        "external-research",
         `topic:${topicId}`,
         summaryForMemory,
       );
       this.memoryService.set(
         "working_memory",
-        "research",
+        "external-research",
         `topic:${topicId}:latest`,
         summaryForMemory,
         {
           expiresAt: new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString(),
         },
       );
+    }
+
+    // Push notification to relevant departments
+    if (items.length > 0) {
+      const notification = {
+        topicId,
+        topicName,
+        itemCount: items.length,
+        highlights: items.slice(0, 3).map((i) => i.content.slice(0, 100)),
+      };
+      const notifNow = new Date().toISOString();
+      for (const dept of ["threads", "note", "competitive-analysis"] as const) {
+        db.insert(departmentNotifications)
+          .values({
+            id: randomUUID(),
+            fromDepartment: "external-research",
+            toDepartment: dept,
+            notificationType: "research_update",
+            content: JSON.stringify(notification),
+            readAt: null,
+            createdAt: notifNow,
+          })
+          .run();
+      }
     }
 
     logger.info({ topicId, count: items.length }, "Research completed");
@@ -232,5 +269,89 @@ ${topicName}
       .orderBy(desc(competitorSnapshots.createdAt))
       .limit(limit)
       .all();
+  }
+
+  async analyzeCompetitorSnapshots(
+    llm: LlmClient,
+    channel: "threads" | "note",
+  ): Promise<{
+    analysisCount: number;
+    winningPatterns: string[];
+    summary: string;
+  }> {
+    const snapshots = db
+      .select()
+      .from(competitorSnapshots)
+      .orderBy(desc(competitorSnapshots.createdAt))
+      .limit(20)
+      .all();
+
+    if (snapshots.length === 0) {
+      return { analysisCount: 0, winningPatterns: [], summary: "競合スナップショットなし" };
+    }
+
+    const snapshotSummary = snapshots
+      .map((s, i) => `[${i + 1}] source: ${s.source}\ndata: ${s.data.slice(0, 500)}`)
+      .join("\n\n");
+
+    const prompt = `以下の競合スナップショットを分析してください。
+チャネル: ${channel}
+
+## スナップショット
+${snapshotSummary}
+
+以下の形式でJSON1つだけ返してください:
+{
+  "themes": ["テーマ1", "テーマ2"],
+  "hooks": ["フック手法1", "フック手法2"],
+  "engagementPatterns": "エンゲージメントパターンの要約",
+  "winningPatterns": [
+    {"pattern": "パターン名", "frequency": "high|medium|low", "estimatedEngagement": "high|medium|low"}
+  ]
+}`;
+
+    const raw = await llm.generate(prompt, {
+      temperature: 0.3,
+      tier: "standard",
+    });
+
+    const parsed = parseJsonObject<{
+      themes: string[];
+      hooks: string[];
+      engagementPatterns: string;
+      winningPatterns: Array<{ pattern: string; frequency: string; estimatedEngagement: string }>;
+    }>(raw);
+
+    if (!parsed) {
+      logger.warn("Failed to parse competitor analysis");
+      return { analysisCount: 0, winningPatterns: [], summary: "分析パース失敗" };
+    }
+
+    // Save each analysis
+    for (const snapshot of snapshots) {
+      db.insert(competitorAnalyses)
+        .values({
+          id: randomUUID(),
+          snapshotId: snapshot.id,
+          channel,
+          themes: JSON.stringify(parsed.themes),
+          hooks: JSON.stringify(parsed.hooks),
+          engagementPatterns: parsed.engagementPatterns,
+          winningPatterns: JSON.stringify(parsed.winningPatterns),
+          rawAnalysis: raw,
+          createdAt: new Date().toISOString(),
+        })
+        .onConflictDoNothing()
+        .run();
+    }
+
+    const winningPatternNames = parsed.winningPatterns.map((p) => p.pattern);
+    const summary = `競合分析完了: ${snapshots.length}件のスナップショットからテーマ${parsed.themes.length}件、勝ちパターン${winningPatternNames.length}件を抽出`;
+
+    return {
+      analysisCount: snapshots.length,
+      winningPatterns: winningPatternNames,
+      summary,
+    };
   }
 }

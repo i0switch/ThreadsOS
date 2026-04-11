@@ -131,7 +131,7 @@ describe("Heartbeat Flow Integration", () => {
     };
     const mockReports = [
       {
-        department: "community" as const,
+        department: "threads" as const,
         summary: "test",
         metrics: { pendingReplies: 0, avgEngagement: 0 },
         recommendation: "test",
@@ -150,7 +150,7 @@ describe("Heartbeat Flow Integration", () => {
     // Step 4: Record a department run
     await executive.recordDepartmentRun({
       cycleId: cycle.cycleId,
-      department: "community",
+      department: "threads",
       phase: "fetch_engagement",
       status: "completed",
       summary: "Fetched engagement for 3 posts",
@@ -171,7 +171,7 @@ describe("Heartbeat Flow Integration", () => {
 
     const deptRuns = db.select().from(schema.departmentRuns).all();
     expect(deptRuns).toHaveLength(1);
-    expect(deptRuns[0].department).toBe("community");
+    expect(deptRuns[0].department).toBe("threads");
   });
 
   it("skips heartbeat when system_controls has global pause", () => {

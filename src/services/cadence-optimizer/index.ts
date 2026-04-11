@@ -5,6 +5,7 @@ import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import {
   contentSlots,
+  notePostResults,
   optimizationDecisions,
   threadPostResults,
 } from "../../db/schema.js";
@@ -29,17 +30,33 @@ export interface TimeSlot {
   avgEngagementRate: number;
 }
 
+type CadenceChannel = "threads" | "note";
+
 export interface CadenceOptimizerService {
   analyzeOptimalTimes(channel?: string): Promise<TimeSlot[]>;
-  adjustFrequency(llm: LlmClient): Promise<string>;
+  adjustFrequency(llm: LlmClient, channel?: CadenceChannel): Promise<string>;
   generateSchedule(channel: string, days: number): Promise<void>;
-  analyzeAndUpdate(llm: LlmClient): Promise<void>;
+  analyzeAndUpdate(llm: LlmClient, channel?: CadenceChannel): Promise<void>;
 }
 
-const DEFAULT_FREQUENCY_RECOMMENDATION = {
-  recommendedPostsPerDay: 3,
-  minIntervalHours: 8,
-  reasoning: "データが少ないため安全側の既定値を採用",
+const DEFAULT_FREQUENCY_RECOMMENDATIONS: Record<
+  CadenceChannel,
+  {
+    recommendedPostsPerDay: number;
+    minIntervalHours: number;
+    reasoning: string;
+  }
+> = {
+  threads: {
+    recommendedPostsPerDay: 3,
+    minIntervalHours: 8,
+    reasoning: "データが少ないため安全側の既定値を採用",
+  },
+  note: {
+    recommendedPostsPerDay: 1,
+    minIntervalHours: 24,
+    reasoning: "note実績が少ないため、1日1本ペースを既定値にする",
+  },
 };
 
 function getJstWeekdayHour(date: Date): { dayOfWeek: number; hour: number } {
@@ -101,11 +118,18 @@ function buildCandidateScheduleTimes(
 
 export class CadenceOptimizerServiceImpl implements CadenceOptimizerService {
   async analyzeOptimalTimes(channel = "threads"): Promise<TimeSlot[]> {
-    if (channel !== "threads") {
-      return [];
-    }
-
-    const results = db.select().from(threadPostResults).all();
+    const results =
+      channel === "note"
+        ? db.select().from(notePostResults).all().map((result) => ({
+            publishedAt: result.publishedAt,
+            impressions: result.views,
+            likes: result.likes,
+            repliesCount: result.commentsCount,
+            shares:
+              result.purchasesCount * 5 +
+              Math.max(0, Math.floor(result.revenueYen / 100)),
+          }))
+        : db.select().from(threadPostResults).all();
     const slots = new Map<string, { total: number; engagement: number }>();
 
     for (const result of results) {
@@ -136,21 +160,72 @@ export class CadenceOptimizerServiceImpl implements CadenceOptimizerService {
     return timeSlots;
   }
 
-  async adjustFrequency(llm: LlmClient): Promise<string> {
-    const results = db
-      .select()
-      .from(threadPostResults)
-      .orderBy(desc(threadPostResults.createdAt))
-      .limit(30)
-      .all();
+  async adjustFrequency(
+    llm: LlmClient,
+    channel: CadenceChannel = "threads",
+  ): Promise<string> {
+    const fallback = DEFAULT_FREQUENCY_RECOMMENDATIONS[channel];
 
-    if (results.length === 0) {
-      return JSON.stringify(DEFAULT_FREQUENCY_RECOMMENDATION);
+    const resultLines =
+      channel === "note"
+        ? (() => {
+            const noteResults = db
+              .select()
+              .from(notePostResults)
+              .orderBy(desc(notePostResults.createdAt))
+              .limit(30)
+              .all();
+
+            if (noteResults.length === 0) {
+              return null;
+            }
+
+            return noteResults
+              .map(
+                (result) =>
+                  `${result.publishedAt}: views=${result.views}, likes=${result.likes}, comments=${result.commentsCount}, purchases=${result.purchasesCount}, revenue=${result.revenueYen}, cv=${result.conversionRate}`,
+              )
+              .join("\n");
+          })()
+        : (() => {
+            const threadResults = db
+              .select()
+              .from(threadPostResults)
+              .orderBy(desc(threadPostResults.createdAt))
+              .limit(30)
+              .all();
+
+            if (threadResults.length === 0) {
+              return null;
+            }
+
+            return threadResults
+              .map(
+                (result) =>
+                  `${result.publishedAt}: imp=${result.impressions}, likes=${result.likes}, replies=${result.repliesCount}`,
+              )
+              .join("\n");
+          })();
+
+    if (!resultLines) {
+      return JSON.stringify(fallback);
     }
 
-    const prompt = `以下の直近30投稿のデータから、最適な投稿頻度を分析してください。
+    const prompt =
+      channel === "note"
+        ? `以下の直近30本のnote公開データから、最適な公開頻度を分析してください。
 
-${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, likes=${result.likes}, replies=${result.repliesCount}`).join("\n")}
+${resultLines}
+
+以下の形式で回答:
+{
+  "recommendedPostsPerDay": 数値,
+  "minIntervalHours": 数値,
+  "reasoning": "理由"
+}`
+        : `以下の直近30投稿のデータから、最適な投稿頻度を分析してください。
+
+${resultLines}
 
 以下の形式で回答:
 {
@@ -165,9 +240,9 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
         tier: "premium",
       });
       const parsed =
-        parseJsonObject<Partial<typeof DEFAULT_FREQUENCY_RECOMMENDATION>>(raw);
+        parseJsonObject<Partial<typeof fallback>>(raw);
       if (!parsed) {
-        return JSON.stringify(DEFAULT_FREQUENCY_RECOMMENDATION);
+        return JSON.stringify(fallback);
       }
 
       const recommendedPostsPerDay = Number(parsed.recommendedPostsPerDay);
@@ -177,7 +252,7 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
         !Number.isFinite(recommendedPostsPerDay) ||
         !Number.isFinite(minIntervalHours)
       ) {
-        return JSON.stringify(DEFAULT_FREQUENCY_RECOMMENDATION);
+        return JSON.stringify(fallback);
       }
 
       return JSON.stringify({
@@ -186,16 +261,14 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
           Math.min(10, recommendedPostsPerDay),
         ),
         minIntervalHours: Math.max(1, Math.min(24, minIntervalHours)),
-        reasoning:
-          parsed.reasoning?.toString() ??
-          DEFAULT_FREQUENCY_RECOMMENDATION.reasoning,
+        reasoning: parsed.reasoning?.toString() ?? fallback.reasoning,
       });
     } catch (error) {
       logger.warn(
-        { error },
+        { channel, error },
         "Failed to adjust posting frequency, using fallback",
       );
-      return JSON.stringify(DEFAULT_FREQUENCY_RECOMMENDATION);
+      return JSON.stringify(fallback);
     }
   }
 
@@ -314,14 +387,17 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
     );
   }
 
-  async analyzeAndUpdate(llm: LlmClient): Promise<void> {
-    const frequencyRecommendation = await this.adjustFrequency(llm);
-    await this.generateSchedule("threads", 7);
+  async analyzeAndUpdate(
+    llm: LlmClient,
+    channel: CadenceChannel = "threads",
+  ): Promise<void> {
+    const frequencyRecommendation = await this.adjustFrequency(llm, channel);
+    await this.generateSchedule(channel, 7);
 
     db.insert(optimizationDecisions)
       .values({
         id: randomUUID(),
-        channel: "threads",
+        channel,
         decisionType: "frequency",
         beforeValue: JSON.stringify({ source: "recent_posts" }),
         afterValue: frequencyRecommendation,
@@ -333,7 +409,7 @@ ${results.map((result) => `${result.publishedAt}: imp=${result.impressions}, lik
       .run();
 
     logger.info(
-      { frequencyRecommendation },
+      { channel, frequencyRecommendation },
       "Cadence optimizer updated schedule",
     );
   }

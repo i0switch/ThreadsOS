@@ -7,6 +7,31 @@ export async function dashboardRoutes(app: FastifyInstance) {
     return dq.getSummary();
   });
 
+  // ── Aggregated Dashboard APIs ──────────────────────────
+  app.get("/api/dashboard/home", async () => {
+    return dq.getDashboardHome();
+  });
+
+  app.get("/api/dashboard/inbox", async () => {
+    return dq.getDashboardInbox();
+  });
+
+  app.get("/api/dashboard/storyboard", async () => {
+    return dq.getDashboardStoryboard();
+  });
+
+  app.get("/api/dashboard/decisions", async () => {
+    return dq.getDashboardDecisions();
+  });
+
+  app.get("/api/dashboard/timeline", async () => {
+    return dq.getDashboardTimeline();
+  });
+
+  app.get("/api/dashboard/funnel", async () => {
+    return dq.getDashboardFunnel();
+  });
+
   // ── Departments ────────────────────────────────────────
   app.get("/api/dashboard/departments", async () => {
     return dq.getDepartments();

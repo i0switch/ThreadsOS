@@ -16,6 +16,7 @@ export interface PostGenerationService {
     count: number,
     llm: LlmClient,
     improvementInsights?: string,
+    noteThemeContext?: string,
   ): Promise<ThreadPostDraft[]>;
   getDraft(draftId: string): Promise<ThreadPostDraft | null>;
   regenerateDraft(
@@ -35,6 +36,7 @@ export class PostGenerationServiceImpl implements PostGenerationService {
     count: number,
     llm: LlmClient,
     improvementInsights?: string,
+    noteThemeContext?: string,
   ): Promise<ThreadPostDraft[]> {
     const profileText = this.profileService.formatForPrompt();
     const profileSection = profileText
@@ -42,6 +44,9 @@ export class PostGenerationServiceImpl implements PostGenerationService {
       : "";
     const insightsSection = improvementInsights
       ? `\n## 過去の分析から得た改善指示\n${improvementInsights}\n`
+      : "";
+    const noteThemeSection = noteThemeContext
+      ? `\n## note起点の集客コンテキスト\n${noteThemeContext}\n`
       : "";
 
     const prompt = `あなたはThreads投稿のドラフトを作成するコピーライターです。
@@ -52,6 +57,7 @@ ${topicName}
 ## リサーチ
 ${researchSummary}
 ${insightsSection}
+${noteThemeSection}
 ## 要件
 - ${count}本の投稿候補を作成
 - 1投稿1メッセージ原則

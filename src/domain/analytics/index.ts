@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const improvementInsightSchema = z.object({
   id: z.string(),
-  sourceType: z.enum(["thread_post", "note", "retro"]),
+  sourceType: z.enum(["thread_post", "note", "retro", "reply_effect"]),
   sourceId: z.string(),
   insight: z.string(),
   action: z.string(),

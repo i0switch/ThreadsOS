@@ -5,11 +5,10 @@ import type {
 
 export type DepartmentName =
   | "command"
-  | "research"
+  | "external-research"
+  | "competitive-analysis"
   | "threads"
-  | "note"
-  | "community"
-  | "optimization";
+  | "note";
 
 export type DepartmentRunStatus = "completed" | "failed";
 
@@ -33,6 +32,8 @@ export interface DepartmentDirective {
 export interface DepartmentExecutionContext {
   action: ScheduledAction;
   dryRun: boolean;
+  /** Executiveから部署への具体的指示（あれば） */
+  instruction?: string;
 }
 
 export interface DepartmentExecutionResult {
@@ -64,21 +65,44 @@ export interface DepartmentExecutor {
   report(): DepartmentReport;
 }
 
-export function resolveDepartmentName(actionType: ActionType): DepartmentName {
+export interface ResolveDepartmentNameOptions {
+  channel?: "threads" | "note";
+  researchMode?: "external" | "competitive" | "threads" | "note";
+}
+
+export function resolveDepartmentName(
+  actionType: ActionType,
+  options: ResolveDepartmentNameOptions = {},
+): DepartmentName {
   switch (actionType) {
     case "process_human_inputs":
+    case "notify":
       return "command";
     case "research_threads":
+      if (options.researchMode === "threads") {
+        return "threads";
+      }
+      if (options.researchMode === "competitive") {
+        return "competitive-analysis";
+      }
+      return "external-research";
     case "research_note":
-      return "research";
+      if (options.researchMode === "competitive") {
+        return "competitive-analysis";
+      }
+      return "note";
+    case "analyze_competitors":
+      return "competitive-analysis";
     case "generate_and_post":
+    case "fetch_engagement":
+    case "reply_safe":
+    case "weekly_retro":
       return "threads";
     case "generate_note":
       return "note";
-    case "reply_safe":
-    case "fetch_engagement":
-      return "community";
+    case "optimize_schedule":
+      return options.channel === "note" ? "note" : "threads";
     default:
-      return "optimization";
+      return "command";
   }
 }

@@ -97,11 +97,10 @@ function latestRowsByKey<T>(
 }
 
 const DEPARTMENT_DISPLAY_NAMES: Record<string, string> = {
-  command: "司令塔",
-  optimization: "改善判断",
-  research: "リサーチ",
-  threads: "Threads投稿",
-  community: "返信・反応分析",
+  command: "管理指揮",
+  "external-research": "外部リサーチ",
+  "competitive-analysis": "競合リサーチ分析",
+  threads: "Threads運用",
   note: "note運用",
   system: "システム",
 };
@@ -109,18 +108,23 @@ const DEPARTMENT_DISPLAY_NAMES: Record<string, string> = {
 const WORKSTREAM_DEFINITIONS = [
   {
     id: "command",
-    label: "司令塔",
-    departments: ["command", "optimization"],
+    label: "管理指揮",
+    departments: ["command"],
   },
   {
-    id: "research",
-    label: "リサーチ",
-    departments: ["research"],
+    id: "external-research",
+    label: "外部リサーチ",
+    departments: ["external-research"],
+  },
+  {
+    id: "competitive-analysis",
+    label: "競合リサーチ分析",
+    departments: ["competitive-analysis"],
   },
   {
     id: "threads",
     label: "Threads運用",
-    departments: ["threads", "community"],
+    departments: ["threads"],
   },
   {
     id: "note",
@@ -196,6 +200,14 @@ function humanizeInternalText(value: string | null | undefined): string | null {
     [/Auto-published (\d+) threads posts?/g, "Threads投稿を$1件自動公開"],
     [/Generated (\d+) note drafts\./g, "note下書きを$1件作成"],
     [/Auto-published (\d+) notes?/g, "note記事を$1件自動公開"],
+    [/Adjusted by cadence optimizer/g, "投稿ペースを自動調整"],
+    [/No draft-bound pending slots to reschedule/g, "動かせる予約枠がなく、時間調整は見送り"],
+    [/Progress notification sent/g, "進捗共有を送信"],
+    [/\bnightly-note-pipeline\b/g, "夜間note運用"],
+    [/\bhourly-heartbeat\b/g, "定期チェック"],
+    [/\bnote-competitor-research\b/g, "note競合リサーチ"],
+    [/\bweekly-retro\b/g, "週次ふりかえり"],
+    [/\bpost-publish-followup\b/g, "公開後フォロー"],
     [/\bheartbeat running\b/g, "定期チェックを実行中"],
     [/\bfunnel_expansion\b/g, "ファネル拡大"],
     [/\bbootstrap\b/g, "立ち上げ"],
@@ -845,13 +857,11 @@ export function getSummary(): DashboardSummary {
   const noteDepartments = departmentOverviews.filter(
     (row) => row.department === "note",
   );
-  const threadsDepartments = departmentOverviews.filter((row) =>
-    ["threads", "community"].includes(row.department),
+  const threadsDepartments = departmentOverviews.filter(
+    (row) => row.department === "threads",
   );
   const noteAgents = allAgents.filter((row) => row.department === "note");
-  const threadsAgents = allAgents.filter((row) =>
-    ["threads", "community"].includes(row.department),
-  );
+  const threadsAgents = allAgents.filter((row) => row.department === "threads");
 
   const noteLastActivityAt = latestTimestamp(
     noteDepartments
@@ -1204,6 +1214,1491 @@ export function getSummary(): DashboardSummary {
     proposalStats,
     departmentHighlights,
     agentHighlights,
+  };
+}
+
+type StoryboardStatus = "working" | "attention" | "stalled" | "idle";
+type InboxLevel = "critical" | "warning" | "info";
+type SetupStatus = "done" | "inferred" | "missing";
+type TimelineActorType = "ai" | "human" | "system";
+type TimelineKind =
+  | "approval"
+  | "rejection"
+  | "pause"
+  | "resume"
+  | "directive"
+  | "ai_action"
+  | "error"
+  | "stall"
+  | "policy_change"
+  | "review";
+
+function setupStatusLabel(status: SetupStatus): string {
+  switch (status) {
+    case "done":
+      return "完了";
+    case "inferred":
+      return "確認中";
+    default:
+      return "未設定";
+  }
+}
+
+function metricDisplayName(key: string): string {
+  const labels: Record<string, string> = {
+    recommendedPostsPerDay: "推奨投稿数/日",
+    minIntervalHours: "投稿の最小間隔",
+    reasoning: "判断理由",
+    slotsUpdated: "更新した枠数",
+    source: "データ元",
+    beforeValue: "変更前",
+    afterValue: "変更後",
+    changePercent: "変化率",
+    channel: "対象",
+    content: "内容",
+    scope: "対象範囲",
+    target: "反映先",
+    priority: "優先度",
+    department: "チーム",
+    agentId: "担当AI",
+    objective: "運用方針",
+    funnelStage: "導線の段階",
+  };
+
+  return labels[key] ?? key;
+}
+
+function humanizeValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+
+  if (typeof value === "string") {
+    return humanizeInternalText(value) ?? value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isInteger(value)
+      ? value.toLocaleString("ja-JP")
+      : value.toFixed(2);
+  }
+
+  if (typeof value === "boolean") {
+    return value ? "はい" : "いいえ";
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 4)
+      .map((item) => humanizeValue(item))
+      .join(" / ");
+  }
+
+  if (typeof value === "object") {
+    return Object.entries(value)
+      .slice(0, 4)
+      .map(([key, item]) => `${metricDisplayName(key)}: ${humanizeValue(item)}`)
+      .join(" / ");
+  }
+
+  return String(value);
+}
+
+function detailLinesFromValue(
+  value: unknown,
+  fallback = "情報なし",
+  limit = 4,
+): string[] {
+  const parsed =
+    typeof value === "string" ? tryParseJson(value) ?? value : value ?? null;
+
+  if (parsed === null || parsed === undefined || parsed === "") {
+    return [fallback];
+  }
+
+  if (typeof parsed === "string") {
+    return [humanizeInternalText(parsed) ?? parsed];
+  }
+
+  if (Array.isArray(parsed)) {
+    const lines = parsed
+      .slice(0, limit)
+      .map((item) => humanizeValue(item))
+      .filter((item) => item !== "-");
+    return lines.length > 0 ? lines : [fallback];
+  }
+
+  if (typeof parsed === "object") {
+    const lines = Object.entries(parsed)
+      .slice(0, limit)
+      .map(([key, item]) => `${metricDisplayName(key)}: ${humanizeValue(item)}`);
+    return lines.length > 0 ? lines : [fallback];
+  }
+
+  return [humanizeValue(parsed)];
+}
+
+function compactText(value: string | null | undefined, fallback = "情報なし") {
+  const text = humanizeInternalText(value ?? "") ?? "";
+  return text.length > 0 ? text : fallback;
+}
+
+function toStoryboardStatus(params: {
+  paused: boolean;
+  stale: boolean;
+  hasBlocker: boolean;
+  activeAgents: number;
+}): StoryboardStatus {
+  if (params.paused || params.stale) {
+    return "stalled";
+  }
+
+  if (params.hasBlocker) {
+    return "attention";
+  }
+
+  if (params.activeAgents > 0) {
+    return "working";
+  }
+
+  return "idle";
+}
+
+function storyboardStatusLabel(status: StoryboardStatus): string {
+  switch (status) {
+    case "working":
+      return "稼働中";
+    case "attention":
+      return "注意";
+    case "stalled":
+      return "停滞";
+    default:
+      return "待機中";
+  }
+}
+
+function parseDirectiveContent(content: string): {
+  content: string;
+  scope?: string | null;
+  target?: string | null;
+  department?: string | null;
+  agentId?: string | null;
+  priority?: string | null;
+} {
+  const parsed = tryParseJson(content);
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { content: humanizeInternalText(content) ?? content };
+  }
+
+  const directive = parsed as Record<string, unknown>;
+  const topic =
+    typeof directive.topic === "string" ? compactText(directive.topic) : null;
+  const source =
+    typeof directive.source === "string" ? compactText(directive.source) : null;
+  const fallbackContent = topic
+    ? `${topic} に関する運用メモを共有`
+    : source
+      ? `${source} の調査メモを共有`
+      : "次回の運用判断に使う管理者メモを共有";
+
+  return {
+    content: humanizeValue(directive.content ?? fallbackContent),
+    scope:
+      typeof directive.scope === "string" ? directive.scope : (null as null),
+    target:
+      typeof directive.target === "string" ? directive.target : (null as null),
+    department:
+      typeof directive.department === "string"
+        ? directive.department
+        : (null as null),
+    agentId:
+      typeof directive.agentId === "string"
+        ? directive.agentId
+        : (null as null),
+    priority:
+      typeof directive.priority === "string"
+        ? directive.priority
+        : (null as null),
+  };
+}
+
+function humanizeDecisionTitle(title: string, department: string): string {
+  const lower = title.toLowerCase();
+  if (lower.includes("frequency")) {
+    return `${departmentDisplayName(department)}の投稿頻度を見直す提案`;
+  }
+  if (lower.includes("timing")) {
+    return `${departmentDisplayName(department)}の実行タイミングを見直す提案`;
+  }
+  return compactText(title);
+}
+
+function summarizeJobResult(jobName: string, resultSummary: string | null): string {
+  const job = humanizeInternalText(jobName) ?? jobName;
+  const result = compactText(resultSummary, "結果はまだありません");
+  return `${job}: ${result}`;
+}
+
+function teamStatusFromChannels(
+  statuses: Array<DashboardSummary["channelSnapshots"][number]["status"]>,
+): StoryboardStatus {
+  if (statuses.includes("stalled")) return "stalled";
+  if (statuses.includes("attention")) return "attention";
+  if (statuses.includes("running")) return "working";
+  return "idle";
+}
+
+export interface DashboardHomeResponse {
+  generatedAt: string;
+  hero: {
+    health: "ok" | "warning" | "critical";
+    title: string;
+    summary: string;
+    currentTheme: string;
+    currentPolicy: string;
+    nextHeartbeatAt: string | null;
+    nextHeartbeatLabel: string;
+  };
+  setupChecklist: {
+    summary: string;
+    completedCount: number;
+    totalCount: number;
+    items: Array<{
+      id: string;
+      label: string;
+      status: SetupStatus;
+      statusLabel: string;
+      detail: string;
+      nextStep: string;
+    }>;
+  };
+  heartbeatLoop: {
+    cadenceLabel: string;
+    status: StoryboardStatus;
+    statusLabel: string;
+    summary: string;
+    explanation: string;
+    lastRunAt: string | null;
+    nextRunAt: string | null;
+  };
+  stoppedItems: Array<{
+    id: string;
+    label: string;
+    reason: string;
+    status: "warning" | "critical";
+    selectKind: "inbox" | "team" | "funnel-stage" | "funnel";
+    selectId: string;
+  }>;
+  awaitingConfirmation: {
+    count: number;
+    urgentCount: number;
+    summary: string;
+    preview: Array<{
+      id: string;
+      title: string;
+      team: string;
+      level: InboxLevel;
+      kind: string;
+    }>;
+  };
+  todayResults: Array<{
+    id: string;
+    label: string;
+    value: string;
+    context: string;
+    tone: "neutral" | "good" | "warn";
+  }>;
+  aiActivity: Array<{
+    id: string;
+    title: string;
+    summary: string;
+    team: string;
+    at: string;
+  }>;
+  funnelPreview: {
+    status: StoryboardStatus;
+    title: string;
+    summary: string;
+    theme: string;
+    threadsAction: string;
+    noteAction: string;
+    blocker: string | null;
+  };
+}
+
+export interface DashboardInboxResponse {
+  generatedAt: string;
+  mode: "exception_only";
+  summary: string;
+  items: Array<{
+    id: string;
+    kind: "proposal" | "review" | "stall";
+    level: InboxLevel;
+    title: string;
+    summary: string;
+    team: string;
+    createdAt: string;
+    requiresDecision: boolean;
+    requestedDecision: string;
+    approveEndpoint: string | null;
+    rejectEndpoint: string | null;
+    detail: {
+      whyNow: string;
+      impact: string;
+      seenInformation: string[];
+      nextIfApproved: string | null;
+      nextIfRejected: string | null;
+    };
+  }>;
+}
+
+export interface DashboardStoryboardResponse {
+  generatedAt: string;
+  teams: Array<{
+    id: string;
+    label: string;
+    purpose: string;
+    nowDoing: string;
+    basedOn: string[];
+    handoffTo: string;
+    status: StoryboardStatus;
+    statusLabel: string;
+    waitingOnHuman: boolean;
+    waitingReason: string | null;
+    memberSummary: string;
+    members: Array<{
+      id: string;
+      name: string;
+      role: string;
+      status: string;
+    }>;
+    outputs: string[];
+    blockers: string[];
+  }>;
+}
+
+export interface DashboardDecisionFeedResponse {
+  generatedAt: string;
+  items: Array<{
+    id: string;
+    source: "proposal" | "optimization";
+    title: string;
+    team: string;
+    decidedAt: string;
+    status: string;
+    seenInformation: string[];
+    judgment: string;
+    execution: string;
+    expectedResult: string;
+  }>;
+}
+
+export interface DashboardTimelineResponse {
+  generatedAt: string;
+  events: Array<{
+    id: string;
+    at: string;
+    actor: string;
+    actorType: TimelineActorType;
+    team: string;
+    kind: TimelineKind;
+    title: string;
+    summary: string;
+    details: string[];
+    requiresAttention: boolean;
+  }>;
+}
+
+export interface DashboardFunnelResponse {
+  generatedAt: string;
+  currentTheme: string;
+  themeReason: string;
+  status: StoryboardStatus;
+  summary: string;
+  blockers: string[];
+  nextFocus: string;
+  stages: Array<{
+    id: string;
+    title: string;
+    headline: string;
+    detail: string;
+    status: StoryboardStatus;
+    metrics: Array<{
+      label: string;
+      value: string;
+      context: string;
+    }>;
+  }>;
+}
+
+export function getDashboardFunnel(): DashboardFunnelResponse {
+  const summary = getSummary();
+  const strategyState = readStrategyState();
+  const threadsDetail = getDepartmentDetail("threads");
+  const noteDetail = getDepartmentDetail("note");
+
+  const theme =
+    strategyState?.priorityTopics?.[0] ??
+    summary.currentTheme ??
+    noteDetail.currentTheme ??
+    threadsDetail.currentTheme;
+  const themeReason =
+    humanizePolicyText(
+      [
+        strategyState?.objective,
+        strategyState?.funnelStage,
+        summary.currentPolicy,
+      ]
+        .filter((value): value is string => !!value)
+        .join(" / "),
+    ) ?? "方針情報はまだありません";
+
+  const threadsSnapshot = summary.channelSnapshots.find(
+    (item) => item.channel === "threads",
+  );
+  const noteSnapshot = summary.channelSnapshots.find(
+    (item) => item.channel === "note",
+  );
+
+  const threadsActions = unique(
+    [
+      threadsDetail.currentTheme,
+      threadsDetail.currentPolicy,
+      ...threadsDetail.signals.outputs,
+    ].filter((value): value is string => !!value),
+  );
+  const noteActions = unique(
+    [
+      noteDetail.currentTheme,
+      noteDetail.currentPolicy,
+      ...noteDetail.signals.outputs,
+    ].filter((value): value is string => !!value),
+  );
+
+  const blockers = unique(
+    [
+      ...(threadsSnapshot?.blockers ?? []),
+      ...(noteSnapshot?.blockers ?? []),
+      summary.heartbeatFreshness !== "fresh"
+        ? "定期チェックの間隔が乱れている"
+        : null,
+    ].filter((value): value is string => value !== null),
+  );
+
+  const status = teamStatusFromChannels([
+    threadsSnapshot?.status ?? "idle",
+    noteSnapshot?.status ?? "idle",
+  ]);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    currentTheme: theme,
+    themeReason,
+    status,
+    summary:
+      status === "working"
+        ? "Threadsで集客し、noteで収益化する流れが動いている"
+        : status === "attention"
+          ? "導線は動いているが、どこかに確認待ちや失敗が混ざっている"
+          : status === "stalled"
+            ? "集客から収益化までの流れのどこかで止まりが出ている"
+            : "導線は待機中",
+    blockers,
+    nextFocus:
+      blockers.length > 0
+        ? blockers[0]
+        : "反応が良いテーマを起点に、Threadsからnoteへの導線を伸ばす",
+    stages: [
+      {
+        id: "theme",
+        title: "いまのテーマ軸",
+        headline: theme,
+        detail: themeReason,
+        status: "working",
+        metrics: [
+          {
+            label: "方針",
+            value: compactText(summary.currentPolicy),
+            context: "司令塔がいま見ている方向性",
+          },
+        ],
+      },
+      {
+        id: "threads",
+        title: "Threadsでの集客",
+        headline:
+          threadsActions[0] ??
+          threadsSnapshot?.summary ??
+          "Threads側の集客アクションはまだありません",
+        detail:
+          threadsSnapshot?.nextStep ??
+          "Threads投稿と反応分析で流入をつくる段階です",
+        status: teamStatusFromChannels([threadsSnapshot?.status ?? "idle"]),
+        metrics: [
+          {
+            label: "今日の投稿",
+            value: String(summary.threads24h.published),
+            context: "直近24時間で出たThreads投稿",
+          },
+          {
+            label: "7日表示",
+            value: summary.threads7d.impressions.toLocaleString("ja-JP"),
+            context: "集客の母数になっている表示数",
+          },
+        ],
+      },
+      {
+        id: "bridge",
+        title: "Threadsからnoteへの橋渡し",
+        headline:
+          strategyState?.activeActionTypes?.length
+            ? `誘導アクション: ${strategyState.activeActionTypes
+                .map((item) => compactText(item))
+                .join(" / ")}`
+            : "noteテーマを起点に投稿内容を組み立てる",
+        detail:
+          "Threads投稿は単独運用ではなく、noteで売るテーマへ流すための導線として動く",
+        status,
+        metrics: [
+          {
+            label: "導線の段階",
+            value: compactText(strategyState?.funnelStage, "未設定"),
+            context: "いま強めたい導線の位置",
+          },
+        ],
+      },
+      {
+        id: "note",
+        title: "noteでの収益化",
+        headline:
+          noteActions[0] ??
+          noteSnapshot?.summary ??
+          "note側の収益化アクションはまだありません",
+        detail:
+          noteSnapshot?.nextStep ?? "記事生成と改善で収益化を進める段階です",
+        status: teamStatusFromChannels([noteSnapshot?.status ?? "idle"]),
+        metrics: [
+          {
+            label: "今日の公開本数",
+            value: String(summary.notes24h.published),
+            context: "直近24時間で公開したnote記事",
+          },
+          {
+            label: "7日売上",
+            value: `¥${summary.notes7d.revenueYen.toLocaleString("ja-JP")}`,
+            context: "直近7日で積み上がった収益",
+          },
+        ],
+      },
+    ],
+  };
+}
+
+export function getDashboardInbox(): DashboardInboxResponse {
+  const proposals = currentProposalRows("pending").filter(
+    (proposal) =>
+      proposal.currentStage === "human_review" ||
+      proposal.priority === "high" ||
+      proposal.priority === "critical" ||
+      !!proposal.risk,
+  );
+  const reviews = getReviews("pending");
+  const summary = getSummary();
+  const departments = getDepartments();
+
+  const proposalItems: DashboardInboxResponse["items"] = proposals.map(
+    (proposal) => ({
+      id: proposal.id,
+      kind: "proposal",
+      level: proposal.priority === "high" ? "critical" : "warning",
+      title: humanizeDecisionTitle(proposal.title, proposal.department),
+      summary: compactText(proposal.reason, "AIからの提案があります"),
+      team: departmentDisplayName(proposal.department),
+      createdAt: proposal.createdAt,
+      requiresDecision: true,
+      requestedDecision: "AIからの提案を採用するか決めて",
+      approveEndpoint: `/api/dashboard/proposals/${proposal.id}/approve`,
+      rejectEndpoint: `/api/dashboard/proposals/${proposal.id}/reject`,
+      detail: {
+        whyNow: compactText(proposal.reason, "いま判断が必要です"),
+        impact: compactText(
+          humanizeValue(tryParseJson(proposal.expectedEffect)),
+          "反映すると次の運用に進みます",
+        ),
+        seenInformation: unique([
+          ...detailLinesFromValue(proposal.evidence, "根拠情報なし"),
+          ...detailLinesFromValue(proposal.description, "提案内容なし"),
+        ]).slice(0, 5),
+        nextIfApproved: "次の定期チェックまたは担当AIがこの内容を反映する",
+        nextIfRejected: "現方針のまま運用を継続し、必要なら別案を待つ",
+      },
+    }),
+  );
+
+  const reviewItems: DashboardInboxResponse["items"] = reviews.map((review) => ({
+    id: review.id,
+    kind: "review",
+    level: "warning",
+    title: `人の判断が必要: ${compactText(review.itemType)}`,
+    summary: compactText(review.reason),
+    team: "AIチーム全体",
+    createdAt: review.createdAt,
+    requiresDecision: true,
+    requestedDecision: "止まっている処理を続けてよいか決めて",
+    approveEndpoint: `/api/dashboard/reviews/${review.id}/approve`,
+    rejectEndpoint: `/api/dashboard/reviews/${review.id}/reject`,
+    detail: {
+      whyNow: "自動処理だけでは判断できず、ここで止まっている",
+      impact: "承認すると自動処理が再開し、却下するとその流れを止められる",
+      seenInformation: [compactText(review.reason)],
+      nextIfApproved: "停止していた処理を再開する",
+      nextIfRejected: "この流れを止めて別判断を待つ",
+    },
+  }));
+
+  const stallItems: DashboardInboxResponse["items"] = [
+    ...(summary.heartbeatFreshness !== "fresh"
+      ? [
+          {
+            id: "stall:heartbeat",
+            kind: "stall" as const,
+            level:
+              summary.heartbeatFreshness === "missing"
+                ? ("critical" as const)
+                : ("warning" as const),
+            title: "定期チェックの動きが不安定",
+            summary:
+              summary.heartbeatFreshness === "missing"
+                ? "次の定期チェックが見つからない"
+                : "定期チェックの間隔が乱れている",
+            team: "司令塔",
+            createdAt: summary.lastHeartbeatAt ?? new Date().toISOString(),
+            requiresDecision: false,
+            requestedDecision: "状態を確認して、必要なら手動で再開して",
+            approveEndpoint: null,
+            rejectEndpoint: null,
+            detail: {
+              whyNow: compactText(summary.healthReasons[0], "運用全体に影響します"),
+              impact: "ここが止まると、AIチーム全体の自律運用が鈍る",
+              seenInformation: summary.healthReasons,
+              nextIfApproved: null,
+              nextIfRejected: null,
+            },
+          },
+        ]
+      : []),
+    ...departments
+      .filter((department) => !!department.blockingReason)
+      .slice(0, 4)
+      .map((department) => ({
+        id: `stall:${department.department}`,
+        kind: "stall" as const,
+        level: (department.paused ? "critical" : "warning") as InboxLevel,
+        title: `${department.displayName}で停滞が発生`,
+        summary: compactText(department.blockingReason),
+        team: department.displayName,
+        createdAt: department.lastRunAt ?? new Date().toISOString(),
+        requiresDecision: false,
+        requestedDecision: "止まりの原因を確認して、次の一手を決めて",
+        approveEndpoint: null,
+        rejectEndpoint: null,
+        detail: {
+          whyNow: compactText(department.statusSummary),
+          impact: "ここが止まると、前後のチームへの受け渡しも遅れる",
+          seenInformation: [
+            `最新フェーズ: ${compactText(department.recentPhase, "未記録")}`,
+            `最終実行: ${department.lastRunAt ?? "未記録"}`,
+            compactText(department.latestSummary),
+          ],
+          nextIfApproved: null,
+          nextIfRejected: null,
+        },
+      })),
+  ];
+
+  const items = [...proposalItems, ...reviewItems, ...stallItems]
+    .sort(
+      (left, right) =>
+        new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime(),
+    )
+    .slice(0, 16);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: "exception_only",
+    summary:
+      items.length > 0
+        ? "ふだんはAIだけで回る。いまは例外的に人の確認が必要なものだけを出している"
+        : "ふだんはここは空。初期設定が終われば、あとは毎時ハートビートで自律運用します",
+    items,
+  };
+}
+
+export function getDashboardHome(): DashboardHomeResponse {
+  const summary = getSummary();
+  const inbox = getDashboardInbox();
+  const funnel = getDashboardFunnel();
+  const operatorProfile = db.select().from(s.operatorProfiles).limit(1).get();
+  const activeTopics = db
+    .select()
+    .from(s.topics)
+    .where(eq(s.topics.status, "active"))
+    .all();
+  const researchCount =
+    db.select({ value: count() }).from(s.researchItems).get()?.value ?? 0;
+  const competitorSnapshotCount =
+    db.select({ value: count() }).from(s.competitorSnapshots).get()?.value ?? 0;
+  const threadPublishCount =
+    db.select({ value: count() }).from(s.threadPostResults).get()?.value ?? 0;
+  const notePublishCount =
+    db.select({ value: count() }).from(s.notePostResults).get()?.value ?? 0;
+  const noteDraftCount =
+    db.select({ value: count() }).from(s.noteDrafts).get()?.value ?? 0;
+  const completedThumbnailCount =
+    db
+      .select({ value: count() })
+      .from(s.thumbnailTasks)
+      .where(eq(s.thumbnailTasks.status, "completed"))
+      .get()?.value ?? 0;
+  const pendingThumbnailCount =
+    db
+      .select({ value: count() })
+      .from(s.thumbnailTasks)
+      .where(eq(s.thumbnailTasks.status, "pending"))
+      .get()?.value ?? 0;
+  const workstreamToTeamSelection: Record<string, string> = {
+    command: "management",
+    research: "external-research",
+    threads: "threads",
+    note: "note",
+  };
+  const totalTodayRuns =
+    db
+      .select({ value: count() })
+      .from(s.scheduledJobRuns)
+      .where(gte(s.scheduledJobRuns.createdAt, ago(24)))
+      .get()?.value ?? 0;
+  const todayRuns = db
+    .select()
+    .from(s.scheduledJobRuns)
+    .where(gte(s.scheduledJobRuns.createdAt, ago(24)))
+    .orderBy(desc(s.scheduledJobRuns.createdAt))
+    .limit(10)
+    .all();
+
+  const stoppedItems: DashboardHomeResponse["stoppedItems"] = [
+    ...summary.channelSnapshots
+      .filter((item) => item.status !== "running" && item.status !== "idle")
+      .map((item) => ({
+        id: `channel:${item.channel}`,
+        label: `${item.label}の流れ`,
+        reason: item.blockers[0] ?? item.summary,
+        status: (item.status === "stalled" ? "critical" : "warning") as
+          | "critical"
+          | "warning",
+        selectKind: "funnel-stage" as const,
+        selectId: item.channel,
+      })),
+    ...summary.workstreamSnapshots
+      .filter((item) => item.status !== "ok")
+      .map((item) => ({
+        id: `workstream:${item.id}`,
+        label: `${item.label}チーム`,
+        reason: item.blockers[0] ?? item.summary,
+        status: (item.status === "critical" ? "critical" : "warning") as
+          | "critical"
+          | "warning",
+        selectKind: "team" as const,
+        selectId: workstreamToTeamSelection[item.id] ?? "management",
+      })),
+  ].slice(0, 6);
+
+  const aiActivity = todayRuns.map((run) => ({
+    id: run.id,
+    title:
+      run.status === "failed"
+        ? `${compactText(run.jobName)}で問題が発生`
+        : `${compactText(run.jobName)}を実行`,
+    summary: summarizeJobResult(run.jobName, run.resultSummary),
+    team:
+      run.jobName.includes("note")
+        ? "note運用"
+        : run.jobName.includes("research")
+          ? "リサーチ"
+          : run.jobName.includes("heartbeat")
+            ? "司令塔"
+            : "Threads運用",
+    at: run.createdAt,
+  }));
+
+  const setupChecklist: DashboardHomeResponse["setupChecklist"]["items"] = [
+    {
+      id: "theme",
+      label: "運用テーマ・ジャンルの共有",
+      status:
+        operatorProfile?.primaryNiche || activeTopics.length > 0 || summary.currentTheme !== "未設定"
+          ? "done"
+          : "missing",
+      statusLabel: setupStatusLabel(
+        operatorProfile?.primaryNiche || activeTopics.length > 0 || summary.currentTheme !== "未設定"
+          ? "done"
+          : "missing",
+      ),
+      detail:
+        operatorProfile?.primaryNiche || summary.currentTheme !== "未設定"
+          ? `いまの軸: ${operatorProfile?.primaryNiche ?? summary.currentTheme}`
+          : "テーマ軸がまだ見つかっていない",
+      nextStep:
+        operatorProfile?.primaryNiche || activeTopics.length > 0 || summary.currentTheme !== "未設定"
+          ? "このテーマを起点に Threads と note をつなげて回す"
+          : "ジャンルか主テーマを1つ入れると回り始める",
+    },
+    {
+      id: "research",
+      label: "参考資料や競合リサーチ結果の提供",
+      status:
+        researchCount + competitorSnapshotCount > 0 ? "done" : "missing",
+      statusLabel: setupStatusLabel(
+        researchCount + competitorSnapshotCount > 0 ? "done" : "missing",
+      ),
+      detail:
+        researchCount + competitorSnapshotCount > 0
+          ? `参考資料 ${researchCount}件 / 競合データ ${competitorSnapshotCount}件`
+          : "参考資料や競合データがまだ入っていない",
+      nextStep:
+        researchCount + competitorSnapshotCount > 0
+          ? "集まった材料を、各部署の判断根拠として回し続ける"
+          : "資料URLや競合メモを渡すと、判断の精度が上がる",
+    },
+    {
+      id: "accounts",
+      label: "Threads / note アカウント設定",
+      status:
+        threadPublishCount > 0 && notePublishCount > 0
+          ? "done"
+          : threadPublishCount > 0 || notePublishCount > 0 || noteDraftCount > 0
+            ? "inferred"
+            : "missing",
+      statusLabel: setupStatusLabel(
+        threadPublishCount > 0 && notePublishCount > 0
+          ? "done"
+          : threadPublishCount > 0 || notePublishCount > 0 || noteDraftCount > 0
+            ? "inferred"
+            : "missing",
+      ),
+      detail:
+        threadPublishCount > 0 && notePublishCount > 0
+          ? `Threads実績 ${threadPublishCount}件 / note実績 ${notePublishCount}件`
+          : threadPublishCount > 0 || notePublishCount > 0 || noteDraftCount > 0
+            ? "一部の接続や生成までは見えているが、両方の公開確認まではそろっていない"
+            : "Threads と note の接続確認がまだ見えない",
+      nextStep:
+        threadPublishCount > 0 && notePublishCount > 0
+          ? "毎時ハートビートから、そのまま両チャネル運用へ入れる"
+          : "Threads と note の接続をそろえると、自律運用ループに入りやすい",
+    },
+    {
+      id: "note-header",
+      label: "noteヘッダー画像の追加",
+      status:
+        completedThumbnailCount > 0
+          ? "done"
+          : pendingThumbnailCount > 0
+            ? "inferred"
+            : "missing",
+      statusLabel: setupStatusLabel(
+        completedThumbnailCount > 0
+          ? "done"
+          : pendingThumbnailCount > 0
+            ? "inferred"
+            : "missing",
+      ),
+      detail:
+        completedThumbnailCount > 0
+          ? `ヘッダー画像タスク完了 ${completedThumbnailCount}件`
+          : pendingThumbnailCount > 0
+            ? `ヘッダー画像の準備中タスク ${pendingThumbnailCount}件`
+            : "ヘッダー画像の反映状況がまだ見えない",
+      nextStep:
+        completedThumbnailCount > 0
+          ? "note販売導線の第一印象まで含めて運用を回せる"
+          : "ヘッダー画像を入れると note 側の販売体験が整う",
+    },
+  ];
+  const setupCompletedCount = setupChecklist.filter(
+    (item) => item.status === "done",
+  ).length;
+  const heartbeatLoop: DashboardHomeResponse["heartbeatLoop"] = {
+    cadenceLabel: "1時間に1回のハートビート",
+    status:
+      summary.heartbeatFreshness === "fresh"
+        ? "working"
+        : summary.heartbeatFreshness === "stale"
+          ? "attention"
+          : "stalled",
+    statusLabel:
+      summary.heartbeatFreshness === "fresh"
+        ? "正常に巡回中"
+        : summary.heartbeatFreshness === "stale"
+          ? "間隔が乱れている"
+          : "起動源が止まっている",
+    summary:
+      summary.heartbeatFreshness === "fresh"
+        ? "毎時のハートビートを起点に、司令塔から各部署へ判断と実行を回している"
+        : summary.heartbeatFreshness === "stale"
+          ? "毎時ハートビートはあるが、失敗や遅れが混ざっている"
+          : "毎時ハートビートが見つからず、自律運用OSの起動が不安定",
+    explanation:
+      "ユーザーは最初の4つを渡すのが主な役割。その後はこの毎時ハートビートが、リサーチ・投稿・分析・改善をつなぎ続ける",
+    lastRunAt: summary.lastHeartbeatAt,
+    nextRunAt: summary.nextHeartbeatAt,
+  };
+
+  return {
+    generatedAt: new Date().toISOString(),
+    hero: {
+      health: summary.health,
+      title: summary.healthHeadline,
+      summary:
+        summary.healthReasons.length > 0
+          ? `最初の4つを渡したあと、AIチームは毎時ハートビートで回る。いまは ${summary.healthReasons.join(" / ")}`
+          : "最初の4つを渡せば、あとはAIチームが毎時ハートビートで回り続ける",
+      currentTheme: summary.currentTheme,
+      currentPolicy: summary.currentPolicy,
+      nextHeartbeatAt: summary.nextHeartbeatAt,
+      nextHeartbeatLabel:
+        summary.nextHeartbeatAt !== null
+          ? "次の毎時ハートビート"
+          : "毎時ハートビートの予定なし",
+    },
+    setupChecklist: {
+      summary:
+        setupCompletedCount === 4
+          ? "最初に必要な4つはそろっている。このまま毎時ハートビートで継続運用できる"
+          : `${setupCompletedCount}/4 完了。ユーザーが主に触るのはこの4つだけ`,
+      completedCount: setupCompletedCount,
+      totalCount: 4,
+      items: setupChecklist,
+    },
+    heartbeatLoop,
+    stoppedItems,
+    awaitingConfirmation: {
+      count: inbox.items.length,
+      urgentCount: inbox.items.filter((item) => item.level === "critical").length,
+      summary:
+        inbox.items.length > 0
+          ? "通常はAIだけで回る。いまは例外的に止まりや判断待ちが出ている"
+          : "いまは例外対応なし。AIチームだけで継続運用できている",
+      preview: inbox.items.slice(0, 3).map((item) => ({
+        id: item.id,
+        title: item.title,
+        team: item.team,
+        level: item.level,
+        kind: item.kind,
+      })),
+    },
+    todayResults: [
+      {
+        id: "threads-posts",
+        label: "今日のThreads投稿",
+        value: String(summary.threads24h.published),
+        context: `${summary.threads24h.impressions.toLocaleString("ja-JP")} 表示 / ${summary.threads24h.likes.toLocaleString("ja-JP")} いいね`,
+        tone: summary.threads24h.published > 0 ? "good" : "warn",
+      },
+      {
+        id: "note-posts",
+        label: "今日のnote公開",
+        value: String(summary.notes24h.published),
+        context: `${summary.notes24h.views.toLocaleString("ja-JP")} 閲覧 / ¥${summary.notes24h.revenueYen.toLocaleString("ja-JP")}`,
+        tone: summary.notes24h.published > 0 ? "good" : "warn",
+      },
+      {
+        id: "team-health",
+        label: "いま止まりがある数",
+        value: String(stoppedItems.length),
+        context: "先に確認したい停滞や注意",
+        tone: stoppedItems.length > 0 ? "warn" : "neutral",
+      },
+      {
+        id: "recent-actions",
+        label: "今日AIが動いた回数",
+        value: String(totalTodayRuns),
+        context: "直近24時間の重要な実行数",
+        tone: totalTodayRuns > 0 ? "good" : "neutral",
+      },
+    ],
+    aiActivity,
+    funnelPreview: {
+      status: funnel.status,
+      title: "Threads→note の流れ",
+      summary: funnel.summary,
+      theme: funnel.currentTheme,
+      threadsAction:
+        funnel.stages.find((item) => item.id === "threads")?.headline ?? "-",
+      noteAction:
+        funnel.stages.find((item) => item.id === "note")?.headline ?? "-",
+      blocker: funnel.blockers[0] ?? null,
+    },
+  };
+}
+
+export function getDashboardStoryboard(): DashboardStoryboardResponse {
+  const departments = getDepartments();
+  const departmentMap = new Map(departments.map((item) => [item.department, item]));
+  const detailMap = new Map(
+    [
+      "command",
+      "external-research",
+      "competitive-analysis",
+      "threads",
+      "note",
+    ].map(
+      (department) => [department, getDepartmentDetail(department)],
+    ),
+  );
+  const agents = getAgents();
+  const summary = getSummary();
+
+  const blueprints = [
+    {
+      id: "management",
+      label: "管理・指揮系統",
+      purpose: "全体を見て、どのチームに何を優先させるか決める",
+      departments: ["command"],
+      handoffTo: "外部リサーチ部署 / Threads運用部署 / note運用部署",
+      memberFilter: (agent: ReturnType<typeof getAgents>[number]) =>
+        agent.department === "command",
+    },
+    {
+      id: "external-research",
+      label: "外部リサーチ部署",
+      purpose: "市場や最新情報を集めて、各チームの判断材料を増やす",
+      departments: ["external-research"],
+      handoffTo: "競合リサーチ分析部署",
+      memberFilter: (agent: ReturnType<typeof getAgents>[number]) =>
+        agent.department === "external-research",
+    },
+    {
+      id: "competitive-analysis",
+      label: "競合リサーチ分析部署",
+      purpose: "競合の勝ち筋を読み解いて、各チームへ改善案を渡す",
+      departments: ["competitive-analysis"],
+      handoffTo: "Threads運用部署 / note運用部署",
+      memberFilter: (agent: ReturnType<typeof getAgents>[number]) =>
+        agent.department === "competitive-analysis",
+    },
+    {
+      id: "threads",
+      label: "Threads運用部署",
+      purpose: "noteにつながる集客導線をThreads側でつくる",
+      departments: ["threads"],
+      handoffTo: "note運用部署",
+      memberFilter: (agent: ReturnType<typeof getAgents>[number]) =>
+        agent.department === "threads",
+    },
+    {
+      id: "note",
+      label: "note運用部署",
+      purpose: "集客された関心を記事と販売導線で収益へ変える",
+      departments: ["note"],
+      handoffTo: "管理・指揮系統",
+      memberFilter: (agent: ReturnType<typeof getAgents>[number]) =>
+        agent.department === "note",
+    },
+  ];
+
+  const teams = blueprints.map((blueprint) => {
+    const relevantDepartments = blueprint.departments
+      .map((department) => departmentMap.get(department))
+      .filter(
+        (department): department is DepartmentOverview => department !== undefined,
+      );
+    const details = blueprint.departments
+      .map((department) => detailMap.get(department))
+      .filter((detail): detail is DepartmentDetail => detail !== undefined);
+    const members = agents.filter(blueprint.memberFilter).map((agent) => ({
+      id: agent.id,
+      name: agent.name ?? agent.jobName,
+      role: agent.role,
+      status: agent.status,
+    }));
+
+    const blockers = unique(
+      details.flatMap((detail) => detail.signals.blockers).concat(
+        relevantDepartments
+          .map((department) => department.blockingReason)
+          .filter((value): value is string => !!value),
+      ),
+    );
+    const basedOn = unique(
+      details
+        .flatMap((detail) => detail.signals.inputs)
+        .concat(details.map((detail) => detail.currentTheme))
+        .filter((value): value is string => !!value),
+    ).slice(0, 5);
+    const outputs = unique(
+      details
+        .flatMap((detail) => detail.signals.outputs)
+        .concat(details.map((detail) => detail.currentTheme))
+        .filter((value): value is string => !!value),
+    ).slice(0, 5);
+
+    const activeAgents = relevantDepartments.reduce(
+      (total, department) => total + department.activeAgents,
+      0,
+    );
+    const status = toStoryboardStatus({
+      paused: relevantDepartments.some((department) => department.paused),
+      stale: relevantDepartments.some((department) => department.stale),
+      hasBlocker: blockers.length > 0,
+      activeAgents,
+    });
+
+    const waitingCount = details.reduce(
+      (total, detail) =>
+        total +
+        detail.proposals.filter((proposal) => proposal.status === "pending").length,
+      0,
+    );
+
+    return {
+      id: blueprint.id,
+      label: blueprint.label,
+      purpose: blueprint.purpose,
+      nowDoing:
+        outputs[0] ??
+        basedOn[0] ??
+        "いまの動きはまだ記録されていません",
+      basedOn,
+      handoffTo: blueprint.handoffTo,
+      status,
+      statusLabel: storyboardStatusLabel(status),
+      waitingOnHuman: waitingCount > 0,
+      waitingReason:
+        waitingCount > 0 ? `確認待ちの提案が ${waitingCount}件ある` : null,
+      memberSummary: `${members.length}人の担当AIが関与`,
+      members,
+      outputs,
+      blockers,
+    };
+  });
+
+  const threadsSnapshot = summary.channelSnapshots.find(
+    (item) => item.channel === "threads",
+  );
+  const noteSnapshot = summary.channelSnapshots.find(
+    (item) => item.channel === "note",
+  );
+  const noteTeam = teams.find((team) => team.id === "note");
+  const threadsTeam = teams.find((team) => team.id === "threads");
+
+  if (threadsTeam && threadsSnapshot) {
+    threadsTeam.outputs = unique([threadsSnapshot.summary, ...threadsTeam.outputs]).slice(
+      0,
+      5,
+    );
+  }
+
+  if (noteTeam && noteSnapshot) {
+    noteTeam.outputs = unique([noteSnapshot.summary, ...noteTeam.outputs]).slice(
+      0,
+      5,
+    );
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    teams,
+  };
+}
+
+export function getDashboardDecisions(): DashboardDecisionFeedResponse {
+  const proposals = currentProposalRows()
+    .map((proposal) => ({
+      id: proposal.id,
+      source: "proposal" as const,
+      title: humanizeDecisionTitle(proposal.title, proposal.department),
+      team: departmentDisplayName(proposal.department),
+      decidedAt: proposal.createdAt,
+      status: proposal.status,
+      seenInformation: unique([
+        ...detailLinesFromValue(proposal.evidence, "根拠情報なし"),
+        ...detailLinesFromValue(proposal.description, "提案内容なし"),
+      ]).slice(0, 4),
+      judgment: compactText(proposal.reason, "AIが改善提案を出しました"),
+      execution:
+        proposal.status === "pending"
+          ? "この提案は人の確認待ち"
+          : proposal.status === "approved"
+            ? "提案は承認され、反映フェーズへ進んだ"
+            : proposal.status === "rejected"
+              ? "提案は見送りになった"
+              : `提案ステータス: ${proposal.status}`,
+      expectedResult: compactText(
+        humanizeValue(tryParseJson(proposal.expectedEffect)),
+        "期待結果はまだ記録されていません",
+      ),
+    }))
+    .slice(0, 8);
+
+  const optimizations = db
+    .select()
+    .from(s.optimizationDecisions)
+    .orderBy(desc(s.optimizationDecisions.createdAt))
+    .limit(8)
+    .all()
+    .map((decision) => ({
+      id: decision.id,
+      source: "optimization" as const,
+      title: humanizeDecisionTitle(
+        `${decision.decisionType} adjustment`,
+        decision.channel,
+      ),
+      team: departmentDisplayName(decision.channel),
+      decidedAt: decision.createdAt,
+      status: proposalStatusFromApprovedBy(decision.approvedBy),
+      seenInformation: detailLinesFromValue(
+        {
+          beforeValue: tryParseJson(decision.beforeValue),
+          afterValue: tryParseJson(decision.afterValue),
+        },
+        "比較データなし",
+      ),
+      judgment: compactText(decision.reason, "AIが改善判断を行った"),
+      execution: `AIが ${departmentDisplayName(decision.channel)} の設定を調整`,
+      expectedResult: compactText(
+        humanizeValue(tryParseJson(decision.afterValue)),
+        "調整結果はまだありません",
+      ),
+    }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    items: [...proposals, ...optimizations]
+      .sort(
+        (left, right) =>
+          new Date(right.decidedAt).getTime() - new Date(left.decidedAt).getTime(),
+      )
+      .slice(0, 12),
+  };
+}
+
+export function getDashboardTimeline(): DashboardTimelineResponse {
+  const inbox = getDashboardInbox();
+  const proposalLookup = new Map(
+    db.select().from(s.proposals).all().map((proposal) => [proposal.id, proposal]),
+  );
+  const directiveRows = db
+    .select()
+    .from(s.humanInputs)
+    .orderBy(desc(s.humanInputs.createdAt))
+    .limit(8)
+    .all();
+  const controls = db
+    .select()
+    .from(s.systemControls)
+    .orderBy(desc(s.systemControls.createdAt))
+    .limit(12)
+    .all();
+  const proposalEvents = db
+    .select()
+    .from(s.proposalEvents)
+    .orderBy(desc(s.proposalEvents.createdAt))
+    .limit(16)
+    .all();
+  const reviews = db
+    .select()
+    .from(s.humanReviewItems)
+    .orderBy(desc(s.humanReviewItems.createdAt))
+    .limit(12)
+    .all();
+  const jobRuns = db
+    .select()
+    .from(s.scheduledJobRuns)
+    .orderBy(desc(s.scheduledJobRuns.createdAt))
+    .limit(12)
+    .all();
+  const optimizations = db
+    .select()
+    .from(s.optimizationDecisions)
+    .orderBy(desc(s.optimizationDecisions.createdAt))
+    .limit(10)
+    .all();
+
+  const events: DashboardTimelineResponse["events"] = [
+    ...controls.map((control) => ({
+      id: control.id,
+      at: control.createdAt,
+      actor: control.createdBy === "dashboard" ? "管理者" : compactText(control.createdBy),
+      actorType: "human" as const,
+      team: control.scope === "global" ? "AIチーム全体" : departmentDisplayName(control.scope),
+      kind: control.action === "resume" ? ("resume" as const) : ("pause" as const),
+      title:
+        control.action === "resume"
+          ? `${control.scope === "global" ? "全体" : departmentDisplayName(control.scope)}を再開`
+          : `${control.scope === "global" ? "全体" : departmentDisplayName(control.scope)}を停止`,
+      summary: compactText(control.reason),
+      details: [
+        `対象: ${control.scope === "global" ? "AIチーム全体" : departmentDisplayName(control.scope)}`,
+      ],
+      requiresAttention: control.action !== "resume",
+    })),
+    ...directiveRows.map((input) => {
+      const directive = parseDirectiveContent(input.content);
+      return {
+        id: input.id,
+        at: input.createdAt,
+        actor: "管理者",
+        actorType: "human" as const,
+        team: directive.department
+          ? departmentDisplayName(directive.department)
+          : "AIチーム全体",
+        kind: "directive" as const,
+        title: "管理者メモを投入",
+        summary: directive.content,
+        details: [
+          directive.scope ? `対象範囲: ${directive.scope}` : "対象範囲: 全体",
+          directive.target ? `反映先: ${directive.target}` : "反映先: 次回の運用判断",
+          directive.priority ? `優先度: ${directive.priority}` : "優先度: 中",
+        ],
+        requiresAttention: false,
+      };
+    }),
+    ...proposalEvents.map((event) => {
+      const proposal = proposalLookup.get(event.proposalId);
+      const kind =
+        event.action === "approved"
+          ? ("approval" as const)
+          : event.action === "rejected"
+            ? ("rejection" as const)
+            : ("review" as const);
+      return {
+        id: event.id,
+        at: event.createdAt,
+        actor:
+          event.actorId === "dashboard-human"
+            ? "管理者"
+            : compactText(event.actorId),
+        actorType:
+          event.actorId === "dashboard-human"
+            ? ("human" as const)
+            : ("ai" as const),
+        team: proposal
+          ? departmentDisplayName(proposal.department)
+          : "AIチーム全体",
+        kind,
+        title:
+          kind === "approval"
+            ? "AIからの提案を承認"
+            : kind === "rejection"
+              ? "AIからの提案を却下"
+              : "AIが提案を作成",
+        summary: compactText(event.note ?? proposal?.title),
+        details: [
+          proposal ? humanizeDecisionTitle(proposal.title, proposal.department) : "提案情報なし",
+          `段階: ${event.stage}`,
+        ],
+        requiresAttention: kind !== "approval",
+      };
+    }),
+    ...reviews.map((review) => ({
+      id: review.id,
+      at: review.reviewedAt ?? review.createdAt,
+      actor: review.reviewedAt ? "管理者" : "AIチーム",
+      actorType: review.reviewedAt ? ("human" as const) : ("system" as const),
+      team: "AIチーム全体",
+      kind:
+        review.status === "approved"
+          ? ("approval" as const)
+          : review.status === "rejected"
+            ? ("rejection" as const)
+            : ("review" as const),
+      title:
+        review.status === "pending"
+          ? "人の判断が必要な項目が発生"
+          : review.status === "approved"
+            ? "レビュー項目を承認"
+            : "レビュー項目を却下",
+      summary: compactText(review.reason),
+      details: [
+        `種別: ${review.itemType}`,
+        review.reviewerNote ? `メモ: ${review.reviewerNote}` : "メモなし",
+      ],
+      requiresAttention: review.status === "pending",
+    })),
+    ...inbox.items
+      .filter((item) => item.kind === "stall")
+      .slice(0, 8)
+      .map((item) => ({
+        id: `timeline:${item.id}`,
+        at: item.createdAt,
+        actor: "システム",
+        actorType: "system" as const,
+        team: item.team,
+        kind: "stall" as const,
+        title: item.title,
+        summary: item.summary,
+        details: [
+          item.detail.whyNow,
+          item.detail.impact,
+          ...item.detail.seenInformation.slice(0, 2),
+        ],
+        requiresAttention: true,
+      })),
+    ...jobRuns.map((run) => ({
+      id: run.id,
+      at: run.createdAt,
+      actor: "AIチーム",
+      actorType: "ai" as const,
+      team:
+        run.jobName.includes("note")
+          ? "note運用"
+          : run.jobName.includes("research")
+            ? "外部リサーチ部署"
+            : run.jobName.includes("heartbeat")
+              ? "管理・指揮系統"
+              : "Threads運用部署",
+      kind: run.status === "failed" ? ("error" as const) : ("ai_action" as const),
+      title:
+        run.status === "failed"
+          ? `${compactText(run.jobName)}でエラー`
+          : `${compactText(run.jobName)}を実行`,
+      summary: compactText(run.resultSummary, "実行結果はまだありません"),
+      details: [
+        `開始: ${run.startedAt ?? "-"}`,
+        `終了: ${run.finishedAt ?? "-"}`,
+      ],
+      requiresAttention: run.status === "failed",
+    })),
+    ...optimizations.map((decision) => ({
+      id: decision.id,
+      at: decision.createdAt,
+      actor: "AIチーム",
+      actorType: "ai" as const,
+      team: departmentDisplayName(decision.channel),
+      kind: "policy_change" as const,
+      title: "AIが運用方針を調整",
+      summary: compactText(decision.reason),
+      details: detailLinesFromValue(
+        {
+          beforeValue: tryParseJson(decision.beforeValue),
+          afterValue: tryParseJson(decision.afterValue),
+        },
+        "変更内容なし",
+      ),
+      requiresAttention: false,
+    })),
+  ];
+
+  return {
+    generatedAt: new Date().toISOString(),
+    events: events
+      .sort(
+        (left, right) =>
+          new Date(right.at).getTime() - new Date(left.at).getTime(),
+      )
+      .slice(0, 40),
   };
 }
 

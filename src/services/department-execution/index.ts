@@ -4,9 +4,13 @@ import type { NoteApiClient } from "../../adapters/note-api/index.js";
 import type { StorageClient } from "../../adapters/storage/index.js";
 import type { ThreadsApiClient } from "../../adapters/threads-api/index.js";
 import { and, desc, eq, isNull, lte } from "drizzle-orm";
+import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import {
+  competitorAnalyses,
+  competitorSnapshots,
   contentSlots,
+  departmentNotifications,
   departmentRuns,
   departmentSummaries,
   humanInputs,
@@ -39,6 +43,7 @@ import type { NoteEngagementAnalysisService } from "../note-engagement-analysis/
 import type { NotificationService } from "../notification/index.js";
 import type { OrchestrationService } from "../orchestration/index.js";
 import type { ReplyExecutionService } from "../reply-execution/index.js";
+import { ResearchServiceImpl } from "../research/index.js";
 import type { RuntimeStateService } from "../runtime-state/index.js";
 
 type TrackedSubJobRunner = (
@@ -69,9 +74,10 @@ function createResult(
   action: ScheduledAction,
   summary: string,
   payload?: Record<string, unknown>,
+  department = resolveDepartmentName(action.type),
 ): DepartmentExecutionResult {
   return {
-    department: resolveDepartmentName(action.type),
+    department,
     phase: action.type,
     status: "completed",
     summary,
@@ -118,11 +124,10 @@ export class DepartmentExecutionServiceImpl {
   constructor(private readonly deps: DepartmentExecutionDependencies) {
     this.executors = [
       this.createCommandExecutor(),
-      this.createResearchExecutor(),
+      this.createExternalResearchExecutor(),
+      this.createCompetitiveAnalysisExecutor(),
       this.createThreadsExecutor(),
       this.createNoteExecutor(),
-      this.createCommunityExecutor(),
-      this.createOptimizationExecutor(),
     ];
   }
 
@@ -152,7 +157,37 @@ export class DepartmentExecutionServiceImpl {
     return row?.content ?? null;
   }
 
-  async execute(action: ScheduledAction): Promise<DepartmentExecutionResult> {
+  private getUnreadNotifications(department: DepartmentName): string {
+    const unread = db
+      .select()
+      .from(departmentNotifications)
+      .where(
+        and(
+          eq(departmentNotifications.toDepartment, department),
+          isNull(departmentNotifications.readAt),
+        ),
+      )
+      .orderBy(desc(departmentNotifications.createdAt))
+      .limit(5)
+      .all();
+
+    if (unread.length === 0) return "";
+
+    // Mark as read
+    for (const n of unread) {
+      db.update(departmentNotifications)
+        .set({ readAt: new Date().toISOString() })
+        .where(eq(departmentNotifications.id, n.id))
+        .run();
+    }
+
+    return `\n📨 他部署からの通知${unread.length}件: ${unread.map((n) => `[${n.fromDepartment}→${n.notificationType}]`).join(", ")}`;
+  }
+
+  async execute(
+    action: ScheduledAction,
+    instruction?: string,
+  ): Promise<DepartmentExecutionResult> {
     const executor = this.executors.find((candidate) =>
       candidate.supports(action.type),
     );
@@ -160,13 +195,14 @@ export class DepartmentExecutionServiceImpl {
       throw new Error(`No department executor registered for ${action.type}`);
     }
 
-    return executor.execute({ action, dryRun: this.deps.dryRun });
+    return executor.execute({ action, dryRun: this.deps.dryRun, instruction });
   }
 
   private createCommandExecutor(): DepartmentExecutor {
     return {
       department: "command",
-      supports: (actionType) => actionType === "process_human_inputs",
+      supports: (actionType) =>
+        supportsAction(["process_human_inputs", "notify"], actionType),
       report: (): DepartmentReport => {
         const pending = db
           .select()
@@ -191,7 +227,22 @@ export class DepartmentExecutionServiceImpl {
           lastExecutedAt: this.getLastRun("command"),
         };
       },
-      execute: async ({ action }) => {
+      execute: async ({ action, instruction }) => {
+        if (instruction) {
+          logger.info(
+            { department: "command", instruction },
+            "Executive instruction received",
+          );
+        }
+        if (action.type === "notify") {
+          const report = await this.deps.notification.generateProgressReport();
+          await this.deps.notification.sendNotification({
+            type: "progress",
+            report,
+          });
+          return createResult(action, "Progress notification sent");
+        }
+
         const summary = await this.deps.orchestration.processHumanInputs(
           this.deps.llm,
           this.deps.storage,
@@ -201,16 +252,15 @@ export class DepartmentExecutionServiceImpl {
     };
   }
 
-  private createResearchExecutor(): DepartmentExecutor {
+  private createExternalResearchExecutor(): DepartmentExecutor {
     return {
-      department: "research",
-      supports: (actionType) =>
-        supportsAction(["research_threads", "research_note"], actionType),
+      department: "external-research",
+      supports: (actionType) => actionType === "research_threads",
       report: (): DepartmentReport => {
         const lastResearch = db
           .select()
           .from(departmentRuns)
-          .where(eq(departmentRuns.department, "research"))
+          .where(eq(departmentRuns.department, "external-research"))
           .orderBy(desc(departmentRuns.createdAt))
           .limit(1)
           .get();
@@ -223,13 +273,15 @@ export class DepartmentExecutionServiceImpl {
           .from(topics)
           .where(eq(topics.status, "active"))
           .all().length;
-        const researchCurrentState = this.getLatestDepartmentSummary("research");
+        const researchCurrentState = this.getLatestDepartmentSummary(
+          "external-research",
+        );
         const researchLiveSummary =
           hoursSince > 24
             ? `最終リサーチから${Math.floor(hoursSince)}時間経過。更新推奨`
             : `最終リサーチから${Math.floor(hoursSince)}時間。まだ新鮮`;
         return {
-          department: "research",
+          department: "external-research",
           summary: researchCurrentState
             ? `${researchLiveSummary}\n※前回の状態: ${researchCurrentState}`
             : researchLiveSummary,
@@ -242,36 +294,149 @@ export class DepartmentExecutionServiceImpl {
           lastExecutedAt: lastResearch?.createdAt ?? null,
         };
       },
-      execute: async ({ action }) => {
-        if (action.type === "research_threads") {
-          const summary = await this.runAgentSubtask(
-            "threads-competitor-researcher",
-            "Threads競合と外部トレンドを整理",
-            () =>
-              this.deps.runTrackedSubJob("daily-topic-research", () =>
-                this.deps.orchestration.runDailyTopicResearch(
-                  this.deps.llm,
-                  this.deps.storage,
-                  this.deps.dryRun,
-                ),
-              ),
+      execute: async ({ action, instruction }) => {
+        if (instruction) {
+          logger.info(
+            { department: "external-research", instruction },
+            "Executive instruction received",
           );
-          return createResult(action, summary);
         }
-
         const summary = await this.runAgentSubtask(
-          "note-competitor-researcher",
-          "note競合と売れ筋を整理",
+          "trend-researcher",
+          "外部トレンドとトピック調査を更新",
           () =>
-            this.deps.runTrackedSubJob("note-competitor-research", () =>
-              this.deps.orchestration.runNoteResearch(
+            this.deps.runTrackedSubJob("daily-topic-research", () =>
+              this.deps.orchestration.runDailyTopicResearch(
                 this.deps.llm,
                 this.deps.storage,
                 this.deps.dryRun,
               ),
             ),
         );
-        return createResult(action, summary);
+        return createResult(action, summary, undefined, "external-research");
+      },
+    };
+  }
+
+  private createCompetitiveAnalysisExecutor(): DepartmentExecutor {
+    const research = new ResearchServiceImpl();
+    return {
+      department: "competitive-analysis",
+      supports: (actionType) => actionType === "analyze_competitors",
+      report: (): DepartmentReport => {
+        const snapshots = db
+          .select()
+          .from(competitorSnapshots)
+          .orderBy(desc(competitorSnapshots.createdAt))
+          .all();
+        const latestSnapshot = snapshots[0] ?? null;
+        const daysSinceSnapshot = latestSnapshot
+          ? Math.floor(
+              (Date.now() - new Date(latestSnapshot.createdAt).getTime()) /
+                86_400_000,
+            )
+          : 999;
+        const analyses = db
+          .select()
+          .from(competitorAnalyses)
+          .orderBy(desc(competitorAnalyses.createdAt))
+          .limit(1)
+          .all();
+        const latestAnalysis = analyses[0] ?? null;
+        const daysSinceAnalysis = latestAnalysis
+          ? Math.floor(
+              (Date.now() - new Date(latestAnalysis.createdAt).getTime()) /
+                86_400_000,
+            )
+          : 999;
+        const currentState = this.getLatestDepartmentSummary(
+          "competitive-analysis",
+        );
+        const caNotifications = this.getUnreadNotifications("competitive-analysis");
+        const liveSummary = latestSnapshot
+          ? `競合スナップショット: ${snapshots.length}件（最新${daysSinceSnapshot}日前）、分析: ${latestAnalysis ? `最新${daysSinceAnalysis}日前` : "未実行"}${caNotifications}`
+          : `競合スナップショット未取得。比較材料の蓄積が必要${caNotifications}`;
+
+        return {
+          department: "competitive-analysis",
+          summary: currentState
+            ? `${liveSummary}\n※前回の状態: ${currentState}`
+            : liveSummary,
+          metrics: {
+            snapshotCount: snapshots.length,
+            daysSinceSnapshot,
+            daysSinceAnalysis,
+          },
+          recommendation:
+            daysSinceAnalysis >= 7 && snapshots.length > 0
+              ? "競合分析を実行すべき"
+              : snapshots.length === 0
+                ? "競合スナップショットの蓄積を優先すべき"
+                : "動く必要なし",
+          lastExecutedAt:
+            latestAnalysis?.createdAt ??
+            this.getLastRun("competitive-analysis"),
+        };
+      },
+      execute: async ({ action, instruction }) => {
+        if (instruction) {
+          logger.info(
+            { department: "competitive-analysis", instruction },
+            "Executive instruction received",
+          );
+        }
+        const summary = await this.runAgentSubtask(
+          "engagement-analyst",
+          "競合投稿の分析と勝ちパターン抽出",
+          async () => {
+            const threadsResult = await research.analyzeCompetitorSnapshots(
+              this.deps.llm,
+              "threads",
+            );
+            const noteResult = await research.analyzeCompetitorSnapshots(
+              this.deps.llm,
+              "note",
+            );
+
+            // Push notifications to threads and note departments
+            const now = new Date().toISOString();
+            if (threadsResult.winningPatterns.length > 0) {
+              db.insert(departmentNotifications)
+                .values({
+                  id: randomUUID(),
+                  fromDepartment: "competitive-analysis",
+                  toDepartment: "threads",
+                  notificationType: "analysis_complete",
+                  content: JSON.stringify({
+                    winningPatterns: threadsResult.winningPatterns,
+                    summary: threadsResult.summary,
+                  }),
+                  readAt: null,
+                  createdAt: now,
+                })
+                .run();
+            }
+            if (noteResult.winningPatterns.length > 0) {
+              db.insert(departmentNotifications)
+                .values({
+                  id: randomUUID(),
+                  fromDepartment: "competitive-analysis",
+                  toDepartment: "note",
+                  notificationType: "analysis_complete",
+                  content: JSON.stringify({
+                    winningPatterns: noteResult.winningPatterns,
+                    summary: noteResult.summary,
+                  }),
+                  readAt: null,
+                  createdAt: now,
+                })
+                .run();
+            }
+
+            return `競合分析完了: Threads ${threadsResult.analysisCount}件, note ${noteResult.analysisCount}件分析。勝ちパターン: ${[...threadsResult.winningPatterns, ...noteResult.winningPatterns].join(", ") || "なし"}`;
+          },
+        );
+        return createResult(action, summary, undefined, "competitive-analysis");
       },
     };
   }
@@ -279,7 +444,17 @@ export class DepartmentExecutionServiceImpl {
   private createThreadsExecutor(): DepartmentExecutor {
     return {
       department: "threads",
-      supports: (actionType) => actionType === "generate_and_post",
+      supports: (actionType) =>
+        supportsAction(
+          [
+            "generate_and_post",
+            "fetch_engagement",
+            "reply_safe",
+            "optimize_schedule",
+            "weekly_retro",
+          ],
+          actionType,
+        ),
       report: (): DepartmentReport => {
         const pendingDrafts = db
           .select()
@@ -297,24 +472,115 @@ export class DepartmentExecutionServiceImpl {
             ),
           )
           .all().length;
+        const pendingReplies = db
+          .select()
+          .from(replyDecisions)
+          .where(
+            and(
+              eq(replyDecisions.decision, "safe_auto_reply"),
+              isNull(replyDecisions.sentAt),
+            ),
+          )
+          .all().length;
+        const recentEngagement = db
+          .select()
+          .from(threadPostResults)
+          .orderBy(desc(threadPostResults.publishedAt))
+          .limit(5)
+          .all();
+        const avgEngagement =
+          recentEngagement.length > 0
+            ? recentEngagement.reduce(
+                (sum, row) => sum + row.likes + row.repliesCount + row.shares,
+                0,
+              ) / recentEngagement.length
+            : 0;
         const threadsCurrentState = this.getLatestDepartmentSummary("threads");
-        const threadsLiveSummary = `承認済みドラフト在庫: ${pendingDrafts}件、期限到来スロット: ${dueSlots}件`;
+        const threadsNotifications = this.getUnreadNotifications("threads");
+        const threadsLiveSummary = `承認済みドラフト在庫: ${pendingDrafts}件、期限到来スロット: ${dueSlots}件、未返信: ${pendingReplies}件、直近5投稿の平均エンゲージメント: ${avgEngagement.toFixed(1)}${threadsNotifications}`;
         return {
           department: "threads",
           summary: threadsCurrentState
             ? `${threadsLiveSummary}\n※前回の状態: ${threadsCurrentState}`
             : threadsLiveSummary,
-          metrics: { pendingDrafts, dueSlots },
+          metrics: {
+            pendingDrafts,
+            dueSlots,
+            pendingReplies,
+            avgEngagement: Math.round(avgEngagement),
+          },
           recommendation:
-            pendingDrafts === 0
-              ? "ドラフト生成が必要"
-              : dueSlots > 0
+            dueSlots > 0
                 ? "公開実行推奨"
-                : "在庫十分。動く必要なし",
+                : pendingReplies > 0
+                  ? "リプライ処理推奨"
+                  : pendingDrafts === 0
+                    ? "ドラフト生成が必要"
+                    : "在庫十分。動く必要なし",
           lastExecutedAt: this.getLastRun("threads"),
         };
       },
-      execute: async ({ action }) => {
+      execute: async ({ action, instruction }) => {
+        if (instruction) {
+          logger.info(
+            { department: "threads", instruction },
+            "Executive instruction received",
+          );
+        }
+        if (action.type === "fetch_engagement") {
+          const summary = await this.runAgentSubtask(
+            "threads-engagement-analyst",
+            "Threads反応データを取得して分析",
+            () =>
+              this.deps.orchestration.runPostPublishFollowup(
+                this.deps.threadsApi,
+                this.deps.llm,
+                this.deps.dryRun,
+              ),
+          );
+          return createResult(action, summary);
+        }
+
+        if (action.type === "reply_safe") {
+          const sent = await this.runAgentSubtask(
+            "threads-reply-generator",
+            "安全なThreads返信を実行",
+            () =>
+              this.deps.replyExecution.executeSafeReplies(this.deps.threadsApi),
+          );
+          return createResult(action, `Sent ${sent} safe replies`, {
+            sentCount: sent,
+          });
+        }
+
+        if (action.type === "optimize_schedule") {
+          const summary = await this.runAgentSubtask(
+            "cadence-optimizer",
+            "Threadsの投稿頻度と時間帯を最適化",
+            async () => {
+              await this.deps.optimizer.analyzeAndUpdate(this.deps.llm, "threads");
+              return "Threads schedule optimized";
+            },
+          );
+          return createResult(action, summary);
+        }
+
+        if (action.type === "weekly_retro") {
+          const summary = await this.runAgentSubtask(
+            "cadence-optimizer",
+            "Threads運用の週次ふりかえりを更新",
+            () =>
+              this.deps.runTrackedSubJob("weekly-retro", () =>
+                this.deps.orchestration.runWeeklyRetro(
+                  this.deps.llm,
+                  this.deps.storage,
+                  this.deps.dryRun,
+                ),
+              ),
+          );
+          return createResult(action, summary);
+        }
+
         const summaryParts = [
           await this.runAgentSubtask(
             "threads-post-generator",
@@ -347,10 +613,23 @@ export class DepartmentExecutionServiceImpl {
     };
   }
 
+  private async runNoteOptimizationTasks(): Promise<string[]> {
+    await this.deps.optimizer.analyzeAndUpdate(this.deps.llm, "note");
+
+    const report = await this.deps.notification.generateProgressReport();
+    await this.deps.notification.sendNotification({
+      type: "progress",
+      report,
+    });
+
+    return ["Note schedule optimized", "Progress notification sent"];
+  }
+
   private createNoteExecutor(): DepartmentExecutor {
     return {
       department: "note",
-      supports: (actionType) => actionType === "generate_note",
+      supports: (actionType) =>
+        supportsAction(["generate_note", "research_note"], actionType),
       report: (): DepartmentReport => {
         const pendingNoteDrafts = db
           .select()
@@ -372,26 +651,69 @@ export class DepartmentExecutionServiceImpl {
           .select()
           .from(notePostResults)
           .all().length;
+        const noteResearchSnapshots = db
+          .select()
+          .from(competitorSnapshots)
+          .all()
+          .filter((row) => row.source.startsWith("note_search:"))
+          .length;
         const noteCurrentState = this.getLatestDepartmentSummary("note");
-        const noteLiveSummary = `承認済み記事: ${pendingNoteDrafts}件、期限到来スロット: ${dueNoteSlots}件、公開済み: ${publishedNotes}件`;
+        const noteNotifications = this.getUnreadNotifications("note");
+        const noteLiveSummary = `承認済み記事: ${pendingNoteDrafts}件、期限到来スロット: ${dueNoteSlots}件、公開済み: ${publishedNotes}件、競合スナップショット: ${noteResearchSnapshots}件${noteNotifications}`;
         return {
           department: "note",
           summary: noteCurrentState
             ? `${noteLiveSummary}\n※前回の状態: ${noteCurrentState}`
             : noteLiveSummary,
-          metrics: { pendingNoteDrafts, dueNoteSlots, publishedNotes },
+          metrics: {
+            pendingNoteDrafts,
+            dueNoteSlots,
+            publishedNotes,
+            noteResearchSnapshots,
+          },
           recommendation:
             publishedNotes === 0
               ? "note実績ゼロ。記事生成を最優先"
+              : noteResearchSnapshots === 0
+                ? "競合リサーチを先に回すべき"
               : pendingNoteDrafts === 0
-                ? "記事生成が必要"
-                : dueNoteSlots > 0
-                  ? "公開実行推奨"
-                  : "動く必要なし",
+                  ? "記事生成が必要"
+                  : dueNoteSlots > 0
+                    ? "公開実行推奨"
+                    : "動く必要なし",
           lastExecutedAt: this.getLastRun("note"),
         };
       },
-      execute: async ({ action }) => {
+      execute: async ({ action, instruction }) => {
+        if (instruction) {
+          logger.info(
+            { department: "note", instruction },
+            "Executive instruction received",
+          );
+        }
+        if (action.type === "research_note") {
+          const summaryParts = [
+            await this.runAgentSubtask(
+              "note-competitor-researcher",
+              "note競合と売れ筋を整理",
+              () =>
+                this.deps.runTrackedSubJob("note-competitor-research", () =>
+                  this.deps.orchestration.runNoteResearch(
+                    this.deps.llm,
+                    this.deps.storage,
+                    this.deps.dryRun,
+                  ),
+                ),
+            ),
+          ];
+
+          if (!this.deps.dryRun) {
+            summaryParts.push(...(await this.runNoteOptimizationTasks()));
+          }
+
+          return createResult(action, joinSummary(summaryParts));
+        }
+
         const summaryParts: string[] = [];
         const nextNoteSlot = await this.deps.scheduler.getNextNoteSlot();
         const hasDueNoteSlot = nextNoteSlot
@@ -443,150 +765,13 @@ export class DepartmentExecutionServiceImpl {
           );
         }
 
+        if (!this.deps.dryRun) {
+          summaryParts.push(...(await this.runNoteOptimizationTasks()));
+        }
+
         return createResult(action, joinSummary(summaryParts), {
           publishedCount: noteResults.length,
         });
-      },
-    };
-  }
-
-  private createCommunityExecutor(): DepartmentExecutor {
-    return {
-      department: "community",
-      supports: (actionType) =>
-        supportsAction(["fetch_engagement", "reply_safe"], actionType),
-      report: (): DepartmentReport => {
-        const pendingReplies = db
-          .select()
-          .from(replyDecisions)
-          .where(
-            and(
-              eq(replyDecisions.decision, "safe_auto_reply"),
-              isNull(replyDecisions.sentAt),
-            ),
-          )
-          .all().length;
-        const recentEngagement = db
-          .select()
-          .from(threadPostResults)
-          .orderBy(desc(threadPostResults.publishedAt))
-          .limit(5)
-          .all();
-        const avgEngagement =
-          recentEngagement.length > 0
-            ? recentEngagement.reduce(
-                (sum, r) => sum + r.likes + r.repliesCount + r.shares,
-                0,
-              ) / recentEngagement.length
-            : 0;
-        const communityCurrentState = this.getLatestDepartmentSummary("community");
-        const communityLiveSummary = `未返信: ${pendingReplies}件、直近5投稿の平均エンゲージメント: ${avgEngagement.toFixed(1)}`;
-        return {
-          department: "community",
-          summary: communityCurrentState
-            ? `${communityLiveSummary}\n※前回の状態: ${communityCurrentState}`
-            : communityLiveSummary,
-          metrics: {
-            pendingReplies,
-            avgEngagement: Math.round(avgEngagement),
-          },
-          recommendation:
-            pendingReplies > 0 ? "リプライ処理推奨" : "動く必要なし",
-          lastExecutedAt: this.getLastRun("community"),
-        };
-      },
-      execute: async ({ action }) => {
-        if (action.type === "fetch_engagement") {
-          const summary = await this.runAgentSubtask(
-            "threads-engagement-analyst",
-            "Threads反応データを取得して分析",
-            () =>
-              this.deps.orchestration.runPostPublishFollowup(
-                this.deps.threadsApi,
-                this.deps.llm,
-                this.deps.dryRun,
-              ),
-          );
-          return createResult(action, summary);
-        }
-
-        const sent = await this.runAgentSubtask(
-          "threads-reply-generator",
-          "安全なThreads返信を実行",
-          () =>
-            this.deps.replyExecution.executeSafeReplies(this.deps.threadsApi),
-        );
-        return createResult(action, `Sent ${sent} safe replies`, {
-          sentCount: sent,
-        });
-      },
-    };
-  }
-
-  private createOptimizationExecutor(): DepartmentExecutor {
-    return {
-      department: "optimization",
-      supports: (actionType) =>
-        supportsAction(
-          ["weekly_retro", "optimize_schedule", "notify"],
-          actionType,
-        ),
-      report: (): DepartmentReport => {
-        const lastRetro = db
-          .select()
-          .from(departmentRuns)
-          .where(
-            and(
-              eq(departmentRuns.department, "optimization"),
-              eq(departmentRuns.phase, "weekly_retro"),
-            ),
-          )
-          .orderBy(desc(departmentRuns.createdAt))
-          .limit(1)
-          .get();
-        const daysSince = lastRetro
-          ? (Date.now() - new Date(lastRetro.createdAt).getTime()) / 86_400_000
-          : Infinity;
-        const optCurrentState = this.getLatestDepartmentSummary("optimization");
-        const optLiveSummary = `最終振り返りから${Number.isFinite(daysSince) ? Math.floor(daysSince) : "∞"}日経過`;
-        return {
-          department: "optimization",
-          summary: optCurrentState
-            ? `${optLiveSummary}\n※前回の状態: ${optCurrentState}`
-            : optLiveSummary,
-          metrics: {
-            daysSinceRetro: Number.isFinite(daysSince)
-              ? Math.floor(daysSince)
-              : 999,
-          },
-          recommendation:
-            daysSince >= 7 ? "週次振り返り推奨" : "動く必要なし",
-          lastExecutedAt: lastRetro?.createdAt ?? null,
-        };
-      },
-      execute: async ({ action }) => {
-        if (action.type === "weekly_retro") {
-          const summary = await this.deps.runTrackedSubJob("weekly-retro", () =>
-            this.deps.orchestration.runWeeklyRetro(
-              this.deps.llm,
-              this.deps.storage,
-              this.deps.dryRun,
-            ),
-          );
-          return createResult(action, summary);
-        }
-
-        if (action.type === "optimize_schedule") {
-          await this.deps.optimizer.analyzeAndUpdate(this.deps.llm);
-          return createResult(action, "Schedule optimized");
-        }
-
-        const report = await this.deps.notification.generateProgressReport();
-        await this.deps.notification.sendNotification({
-          type: "progress",
-          report,
-        });
-        return createResult(action, "Progress notification sent");
       },
     };
   }

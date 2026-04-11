@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import helmet from "@fastify/helmet";
@@ -64,14 +65,19 @@ export async function buildServer(options: BuildServerOptions = {}) {
     });
   });
 
-  const dashboardPublicDir = resolve(
-    fileURLToPath(new URL(".", import.meta.url)),
-    "../dashboard/public",
-  );
+  const runtimeDir = fileURLToPath(new URL(".", import.meta.url));
+  const dashboardPublicDir = (() => {
+    const directPath = resolve(runtimeDir, "../dashboard/public");
+    if (existsSync(directPath)) {
+      return directPath;
+    }
+    return resolve(runtimeDir, "../../src/dashboard/public");
+  })();
 
   await app.register(fastifyStatic, {
     root: dashboardPublicDir,
     prefix: "/",
+    index: ["index.html"],
     decorateReply: false,
   });
 

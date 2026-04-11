@@ -44,7 +44,9 @@ describe("Server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
-    expect(response.body).toContain("<title>ThreadsOS Dashboard</title>");
+    expect(response.body).toContain(
+      "<title>ThreadsOS | AI運用組織ダッシュボード</title>",
+    );
     await app.close();
   });
 
@@ -85,7 +87,7 @@ describe("Server", () => {
       },
     });
     expect(allowed.statusCode).toBe(200);
-    expect(allowed.body).toContain("ThreadsOS Dashboard");
+    expect(allowed.body).toContain("AI運用組織のいまがわかるダッシュボード");
     await app.close();
   });
 });

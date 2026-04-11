@@ -298,6 +298,18 @@ export const competitorSnapshots = sqliteTable("competitor_snapshots", {
   createdAt: text("created_at").notNull(),
 });
 
+export const competitorAnalyses = sqliteTable("competitor_analyses", {
+  id: text("id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull(),
+  channel: text("channel").notNull(), // "threads" | "note"
+  themes: text("themes").notNull(), // JSON array of theme strings
+  hooks: text("hooks").notNull(), // JSON array of hook patterns
+  engagementPatterns: text("engagement_patterns").notNull(), // JSON summary
+  winningPatterns: text("winning_patterns").notNull(), // JSON array
+  rawAnalysis: text("raw_analysis").notNull(), // Full LLM response
+  createdAt: text("created_at").notNull(),
+});
+
 export const scheduledJobRuns = sqliteTable(
   "scheduled_job_runs",
   {
@@ -339,6 +351,42 @@ export const executiveCycles = sqliteTable("executive_cycles", {
   completedAt: text("completed_at"),
   createdAt: text("created_at").notNull(),
 });
+
+export const strategyHistory = sqliteTable(
+  "strategy_history",
+  {
+    id: text("id").primaryKey(),
+    cycleId: text("cycle_id").notNull(),
+    objective: text("objective").notNull(),
+    funnelStage: text("funnel_stage").notNull(),
+    reasoning: text("reasoning").notNull(),
+    departmentInstructions: text("department_instructions"), // JSON
+    stateJson: text("state_json").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    createdIdx: index("strategy_history_created_idx").on(table.createdAt),
+  }),
+);
+
+export const departmentNotifications = sqliteTable(
+  "department_notifications",
+  {
+    id: text("id").primaryKey(),
+    fromDepartment: text("from_department").notNull(),
+    toDepartment: text("to_department").notNull(),
+    notificationType: text("notification_type").notNull(), // "research_update" | "analysis_complete" | "instruction"
+    content: text("content").notNull(),
+    readAt: text("read_at"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    toUnreadIdx: index("dept_notif_to_unread_idx").on(
+      table.toDepartment,
+      table.readAt,
+    ),
+  }),
+);
 
 export const departmentRuns = sqliteTable(
   "department_runs",

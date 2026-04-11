@@ -3,9 +3,13 @@ import { db } from "../../db/index.js";
 import { agentStates } from "../../db/schema.js";
 import type { ActionType } from "../content-scheduler/index.js";
 
-type AgentStatus = "idle" | "working" | "proposing" | "awaiting_approval";
+export type AgentStatus =
+  | "idle"
+  | "working"
+  | "proposing"
+  | "awaiting_approval";
 
-type AgentDefinition = {
+export type AgentDefinition = {
   id: string;
   name: string;
   department: string;
@@ -14,44 +18,44 @@ type AgentDefinition = {
   leaderId?: string;
 };
 
-const AGENTS: AgentDefinition[] = [
+export const AGENTS: AgentDefinition[] = [
   {
     id: "executive-director",
     name: "Executive Director",
     department: "command",
     role: "executive",
-    actions: ["process_human_inputs"],
+    actions: ["process_human_inputs", "notify"],
   },
   {
     id: "trend-researcher",
     name: "Trend Researcher",
-    department: "research",
+    department: "external-research",
     role: "researcher",
-    actions: ["research_threads", "research_note"],
+    actions: ["research_threads"],
     leaderId: "research-director",
   },
   {
     id: "research-director",
     name: "Research Director",
-    department: "research",
+    department: "external-research",
     role: "leader",
-    actions: ["research_threads", "research_note"],
+    actions: ["research_threads"],
   },
   {
     id: "threads-competitor-researcher",
     name: "Threads Competitor Researcher",
-    department: "research",
+    department: "threads",
     role: "competitor_research",
     actions: ["research_threads"],
-    leaderId: "research-director",
+    leaderId: "threads-operations-director",
   },
   {
     id: "note-competitor-researcher",
     name: "note Competitor Researcher",
-    department: "research",
+    department: "note",
     role: "competitor_research",
     actions: ["research_note"],
-    leaderId: "research-director",
+    leaderId: "note-operations-director",
   },
   {
     id: "threads-post-generator",
@@ -66,23 +70,30 @@ const AGENTS: AgentDefinition[] = [
     name: "Threads Operations Director",
     department: "threads",
     role: "leader",
-    actions: ["generate_and_post"],
+    actions: [
+      "research_threads",
+      "generate_and_post",
+      "fetch_engagement",
+      "reply_safe",
+      "optimize_schedule",
+      "weekly_retro",
+    ],
   },
   {
     id: "threads-engagement-analyst",
     name: "Threads Engagement Analyst",
-    department: "community",
+    department: "threads",
     role: "analyst",
     actions: ["fetch_engagement"],
-    leaderId: "community-director",
+    leaderId: "threads-operations-director",
   },
   {
     id: "threads-reply-generator",
     name: "Threads Reply Generator",
-    department: "community",
+    department: "threads",
     role: "reply_generator",
     actions: ["reply_safe"],
-    leaderId: "community-director",
+    leaderId: "threads-operations-director",
   },
   {
     id: "note-article-generator",
@@ -97,7 +108,7 @@ const AGENTS: AgentDefinition[] = [
     name: "note Engagement Analyst",
     department: "note",
     role: "analyst",
-    actions: ["generate_note"],
+    actions: ["generate_note", "optimize_schedule"],
     leaderId: "note-operations-director",
   },
   {
@@ -105,45 +116,46 @@ const AGENTS: AgentDefinition[] = [
     name: "note Operations Director",
     department: "note",
     role: "leader",
-    actions: ["generate_note"],
+    actions: ["research_note", "generate_note", "optimize_schedule"],
   },
   {
     id: "engagement-analyst",
-    name: "Engagement Analyst",
-    department: "community",
+    name: "Competitive Signal Analyst",
+    department: "competitive-analysis",
     role: "analyst",
-    actions: [],
+    actions: ["analyze_competitors"],
     leaderId: "community-director",
   },
   {
     id: "reply-manager",
     name: "Reply Manager",
-    department: "community",
+    department: "threads",
     role: "reply_manager",
     actions: [],
-    leaderId: "community-director",
+    leaderId: "threads-operations-director",
   },
   {
     id: "community-director",
-    name: "Community Director",
-    department: "community",
+    name: "Competitive Analysis Director",
+    department: "competitive-analysis",
     role: "leader",
-    actions: ["fetch_engagement", "reply_safe"],
+    actions: ["analyze_competitors"],
   },
   {
     id: "cadence-optimizer",
     name: "Cadence Optimizer",
-    department: "optimization",
+    department: "threads",
     role: "optimizer",
-    actions: ["optimize_schedule", "weekly_retro", "notify"],
-    leaderId: "optimization-director",
+    actions: ["optimize_schedule", "weekly_retro"],
+    leaderId: "threads-operations-director",
   },
   {
     id: "optimization-director",
-    name: "Optimization Director",
-    department: "optimization",
+    name: "Command Operations Director",
+    department: "command",
     role: "leader",
-    actions: ["optimize_schedule", "weekly_retro", "notify"],
+    actions: ["notify"],
+    leaderId: "executive-director",
   },
 ];
 
@@ -159,7 +171,7 @@ function nowIso(): string {
 
 function resolveAgents(actionType: ActionType): AgentPair {
   const preferredWorkers: Partial<Record<ActionType, string>> = {
-    research_threads: "threads-competitor-researcher",
+    research_threads: "trend-researcher",
     research_note: "note-competitor-researcher",
     generate_and_post: "threads-post-generator",
     generate_note: "note-article-generator",

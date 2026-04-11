@@ -138,7 +138,7 @@ async function seedDashboardState() {
       },
       {
         id: "ds2",
-        department: "research",
+        department: "external-research",
         summaryType: "daily",
         content: "Researched note competitors for 3 topics.",
         periodKey: "2026-04-08",
@@ -322,7 +322,7 @@ describe("Dashboard API", () => {
             label: "Threads運用",
           }),
           expect.objectContaining({
-            label: "リサーチ",
+            label: "外部リサーチ",
             summary: expect.stringContaining("note競合"),
           }),
         ]),
@@ -527,7 +527,7 @@ describe("Dashboard API", () => {
       expect.arrayContaining([
         expect.objectContaining({
           department: "threads",
-          displayName: "Threads投稿",
+          displayName: "Threads運用",
           statusSummary: expect.any(String),
           stale: false,
           blockingReason: expect.stringContaining("停止"),

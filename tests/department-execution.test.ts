@@ -61,7 +61,7 @@ describe("DepartmentExecutionService", () => {
     expect(autoPublisher.publishApprovedThreadDrafts).toHaveBeenCalledTimes(1);
   });
 
-  it("routes note research through the research department", async () => {
+  it("routes note research through the note department", async () => {
     const runTrackedSubJob = vi.fn(
       async (_jobName: string, task: () => Promise<string>) => task(),
     );
@@ -97,7 +97,7 @@ describe("DepartmentExecutionService", () => {
       reason: "stale research",
     });
 
-    expect(result.department).toBe("research");
+    expect(result.department).toBe("note");
     expect(result.summary).toBe("Researched note competitors");
     expect(runtimeState.startAgent).toHaveBeenCalledWith(
       "note-competitor-researcher",

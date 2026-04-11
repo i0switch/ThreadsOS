@@ -54,19 +54,18 @@ beforeEach(() => {
 });
 
 describe("DepartmentExecution collectReports()", () => {
-  it("returns a report for each of the 6 departments", () => {
+  it("returns a report for each of the 5 departments", () => {
     const service = new DepartmentExecutionServiceImpl(makeMinimalDeps());
     const reports = service.collectReports();
 
-    expect(reports).toHaveLength(6);
+    expect(reports).toHaveLength(5);
 
     const departments = reports.map((r) => r.department);
     expect(departments).toContain("command");
-    expect(departments).toContain("research");
+    expect(departments).toContain("external-research");
+    expect(departments).toContain("competitive-analysis");
     expect(departments).toContain("threads");
     expect(departments).toContain("note");
-    expect(departments).toContain("community");
-    expect(departments).toContain("optimization");
   });
 
   it("each report has the required shape", () => {
@@ -120,14 +119,16 @@ describe("DepartmentExecution collectReports()", () => {
     expect(noteReport!.recommendation).toContain("最優先");
   });
 
-  it("optimization report recommends retro when none has ever run", () => {
+  it("competitive analysis report highlights missing snapshots when none exist", () => {
     const service = new DepartmentExecutionServiceImpl(makeMinimalDeps());
     const reports = service.collectReports();
-    const optReport = reports.find((r) => r.department === "optimization");
+    const analysisReport = reports.find(
+      (r) => r.department === "competitive-analysis",
+    );
 
-    expect(optReport).toBeDefined();
-    expect(optReport!.metrics.daysSinceRetro).toBeGreaterThanOrEqual(7);
-    expect(optReport!.recommendation).toContain("振り返り");
+    expect(analysisReport).toBeDefined();
+    expect(analysisReport!.metrics.snapshotCount).toBe(0);
+    expect(analysisReport!.recommendation).toContain("蓄積");
   });
 
   it("report summary includes DB-backed current-state summary when present", () => {

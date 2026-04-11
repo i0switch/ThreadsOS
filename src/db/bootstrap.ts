@@ -153,6 +153,41 @@ export function ensureAutonomyTables(): void {
     created_at TEXT NOT NULL
   )`);
 
+  db.run(sql`CREATE TABLE IF NOT EXISTS competitor_analyses (
+    id TEXT PRIMARY KEY,
+    snapshot_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    themes TEXT NOT NULL,
+    hooks TEXT NOT NULL,
+    engagement_patterns TEXT NOT NULL,
+    winning_patterns TEXT NOT NULL,
+    raw_analysis TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS strategy_history (
+    id TEXT PRIMARY KEY,
+    cycle_id TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    funnel_stage TEXT NOT NULL,
+    reasoning TEXT NOT NULL,
+    department_instructions TEXT,
+    state_json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS strategy_history_created_idx ON strategy_history(created_at)`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS department_notifications (
+    id TEXT PRIMARY KEY,
+    from_department TEXT NOT NULL,
+    to_department TEXT NOT NULL,
+    notification_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    read_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+  db.run(sql`CREATE INDEX IF NOT EXISTS dept_notif_to_unread_idx ON department_notifications(to_department, read_at)`);
+
   db.run(sql`CREATE TABLE IF NOT EXISTS scheduled_job_runs (
     id TEXT PRIMARY KEY NOT NULL,
     job_name TEXT NOT NULL,

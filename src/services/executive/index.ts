@@ -7,6 +7,7 @@ import {
   departmentRuns,
   executiveCycles,
   improvementInsights,
+  strategyHistory,
   strategyStates,
   threadPostDrafts,
   threadPostResults,
@@ -106,6 +107,30 @@ function isFunnelStage(v: unknown): v is FunnelStage {
 }
 
 export class ExecutiveServiceImpl implements ExecutiveService {
+  private saveStrategyHistory(
+    cycleId: string,
+    objective: HeartbeatObjective,
+    funnelStage: FunnelStage,
+    reasoning: string,
+    departmentInstructions: Record<string, string>,
+    strategy: StrategyStateSnapshot,
+  ): void {
+    db.insert(strategyHistory)
+      .values({
+        id: randomUUID(),
+        cycleId,
+        objective,
+        funnelStage,
+        reasoning,
+        departmentInstructions: Object.keys(departmentInstructions).length > 0
+          ? JSON.stringify(departmentInstructions)
+          : null,
+        stateJson: JSON.stringify(strategy),
+        createdAt: new Date().toISOString(),
+      })
+      .run();
+  }
+
   private buildExecutivePrompt(
     reports: DepartmentReport[],
     candidateActions: ScheduledAction[],
@@ -123,6 +148,17 @@ export class ExecutiveServiceImpl implements ExecutiveService {
           `${i + 1}. type="${a.type}" priority=${a.priority} reason="${a.reason}"`,
       )
       .join("\n");
+
+    const recentHistory = db
+      .select()
+      .from(strategyHistory)
+      .orderBy(desc(strategyHistory.createdAt))
+      .limit(5)
+      .all();
+
+    const historySection = recentHistory.length > 0
+      ? `## 過去の戦略判断（直近${recentHistory.length}回）\n${recentHistory.map((h, i) => `${i + 1}. objective=${h.objective}, funnelStage=${h.funnelStage}, 理由: ${h.reasoning}`).join("\n")}\n\n中長期的な方向性の一貫性を考慮してください。頻繁な方針転換は避け、根拠がない限り前回の方針を継続してください。\n\n`
+      : "";
 
     return `あなたはThreadsOS運用の最高責任者（エグゼクティブ）です。
 各部署から上がってきた状況レポートと、実行候補アクションを見て、
@@ -147,7 +183,7 @@ export class ExecutiveServiceImpl implements ExecutiveService {
 - "conversion": 収益化・コンバージョンフェーズ
 - "optimization": 最適化フェーズ
 
-## 各部署の状況レポート
+${historySection}## 各部署の状況レポート
 
 ${reportSection}
 
@@ -346,6 +382,14 @@ ${actionSection}
           createdAt: fbNow,
         })
         .run();
+      this.saveStrategyHistory(
+        fallback.cycleId,
+        fallback.objective,
+        fallback.funnelStage,
+        fallback.llmReasoning ?? "",
+        {},
+        fallback.strategy,
+      );
       return fallback;
     }
 
@@ -393,7 +437,7 @@ ${actionSection}
       dueNoteSlots:
         reports.find((r) => r.department === "note")?.metrics.dueNoteSlots ?? 0,
       pendingReplies:
-        reports.find((r) => r.department === "community")?.metrics
+        reports.find((r) => r.department === "threads")?.metrics
           .pendingReplies ?? 0,
       latestNoteCount:
         reports.find((r) => r.department === "note")?.metrics.publishedNotes ??
@@ -444,6 +488,15 @@ ${actionSection}
         createdAt: now,
       })
       .run();
+
+    this.saveStrategyHistory(
+      cycleId,
+      objective,
+      funnelStage,
+      rawReasoning,
+      rawInstructions,
+      strategy,
+    );
 
     return {
       cycleId,

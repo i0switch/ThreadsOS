@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import type { ThreadsApiClient } from "../../adapters/threads-api/index.js";
 import { logger } from "../../app/logger.js";
@@ -55,6 +55,10 @@ export interface EngagementAnalysisService {
   analyzePostPerformance(
     postResultId: string,
     llm: LlmClient,
+  ): Promise<ImprovementInsight[]>;
+  measureReplyEffectiveness(
+    postResultId: string,
+    api: ThreadsApiClient,
   ): Promise<ImprovementInsight[]>;
   generateWeeklyReport(llm: LlmClient): Promise<string>;
 }
@@ -134,6 +138,43 @@ function safeParseMetrics(
 export class EngagementAnalysisServiceImpl
   implements EngagementAnalysisService
 {
+  private buildReplyEffectivenessContext(
+    postResultId: string,
+    latestInsights: ImprovementInsight[] = [],
+  ): string {
+    const rows =
+      latestInsights.length > 0
+        ? latestInsights
+        : db
+            .select()
+            .from(improvementInsights)
+            .where(
+              and(
+                eq(improvementInsights.sourceType, "reply_effect"),
+                eq(improvementInsights.sourceId, postResultId),
+              ),
+            )
+            .orderBy(desc(improvementInsights.createdAt))
+            .limit(3)
+            .all()
+            .map((row) => ({
+              id: row.id,
+              sourceType: row.sourceType as ImprovementInsight["sourceType"],
+              sourceId: row.sourceId,
+              insight: row.insight,
+              action: row.action,
+              priority: row.priority as ImprovementInsight["priority"],
+            }));
+
+    if (rows.length === 0) {
+      return "";
+    }
+
+    return rows
+      .map((row) => `- [${row.priority}] ${row.insight} -> ${row.action}`)
+      .join("\n");
+  }
+
   private buildScheduleInsights(
     summaryRows: PerformanceSnapshotSummary["rows"],
   ): ImprovementInsight[] {
@@ -472,6 +513,127 @@ export class EngagementAnalysisServiceImpl
     );
   }
 
+  async measureReplyEffectiveness(
+    postResultId: string,
+    api: ThreadsApiClient,
+  ): Promise<ImprovementInsight[]> {
+    const postResult = db
+      .select()
+      .from(threadPostResults)
+      .where(eq(threadPostResults.id, postResultId))
+      .get();
+    if (!postResult) {
+      return [];
+    }
+
+    const replies = db
+      .select()
+      .from(threadReplies)
+      .where(eq(threadReplies.postResultId, postResultId))
+      .all();
+    const replyIds = new Set(replies.map((reply) => reply.id));
+    const sentDecisions = db
+      .select()
+      .from(replyDecisions)
+      .where(eq(replyDecisions.decision, "safe_auto_reply"))
+      .all()
+      .filter(
+        (decision) => !!decision.sentAt && replyIds.has(decision.replyId),
+      );
+
+    if (sentDecisions.length === 0) {
+      return [];
+    }
+
+    let currentMetrics = {
+      impressions: postResult.impressions,
+      likes: postResult.likes,
+      replies: postResult.repliesCount,
+      shares: postResult.shares,
+      views: postResult.impressions,
+    };
+
+    try {
+      currentMetrics = await api.getInsights(postResult.threadsPostId);
+    } catch (error) {
+      logger.warn(
+        {
+          postResultId,
+          threadsPostId: postResult.threadsPostId,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "Failed to refresh metrics for reply effectiveness, using stored values",
+      );
+    }
+
+    const repliedRows = replies.filter((reply) =>
+      sentDecisions.some((decision) => decision.replyId === reply.id),
+    );
+    const positiveCount = repliedRows.filter(
+      (reply) => reply.sentiment === "positive",
+    ).length;
+    const questionCount = repliedRows.filter(
+      (reply) => reply.sentiment === "question",
+    ).length;
+    const negativeCount = repliedRows.filter(
+      (reply) => reply.sentiment === "negative",
+    ).length;
+    const engagementRate =
+      (currentMetrics.likes + currentMetrics.replies + currentMetrics.shares) /
+      Math.max(currentMetrics.impressions, 1);
+
+    const insights: ImprovementInsight[] = [
+      {
+        id: randomUUID(),
+        sourceType: "reply_effect",
+        sourceId: postResultId,
+        insight: `safe_auto_replyを${sentDecisions.length}件送信した投稿の反応率は${engagementRate.toFixed(3)}`,
+        action:
+          engagementRate >= 0.08
+            ? "質問返信と共感返信を優先し、会話が続いた型を次回の自動返信基準に残す"
+            : "返信文を短くし、相手の意図を一言で返してから次の一問を置く",
+        priority: engagementRate >= 0.08 ? "medium" : "high",
+      },
+      {
+        id: randomUUID(),
+        sourceType: "reply_effect",
+        sourceId: postResultId,
+        insight: `返信相手の内訳は質問${questionCount}件・好意${positiveCount}件・ネガティブ${negativeCount}件`,
+        action:
+          questionCount > 0
+            ? "質問系リプライには追加の具体例で返すテンプレを優先する"
+            : "感謝と要点の再提示を軸にした短文返信を優先する",
+        priority: questionCount > 0 ? "high" : "medium",
+      },
+    ];
+
+    db.delete(improvementInsights)
+      .where(
+        and(
+          eq(improvementInsights.sourceType, "reply_effect"),
+          eq(improvementInsights.sourceId, postResultId),
+        ),
+      )
+      .run();
+
+    const now = new Date().toISOString();
+    for (const insight of insights) {
+      db.insert(improvementInsights)
+        .values({
+          id: insight.id,
+          sourceType: insight.sourceType,
+          sourceId: insight.sourceId,
+          insight: insight.insight,
+          action: insight.action,
+          priority: insight.priority,
+          createdAt: now,
+        })
+        .run();
+    }
+
+    return insights;
+  }
+
   async fetchAndClassifyReplies(
     postResultId: string,
     api: ThreadsApiClient,
@@ -484,6 +646,14 @@ export class EngagementAnalysisServiceImpl
       .get();
     if (!postResult) throw new Error(`Post result not found: ${postResultId}`);
 
+    const replyEffectiveness = await this.measureReplyEffectiveness(
+      postResultId,
+      api,
+    );
+    const replyEffectivenessContext = this.buildReplyEffectivenessContext(
+      postResultId,
+      replyEffectiveness,
+    );
     const replies = await api.getReplies(postResult.threadsPostId);
     const now = new Date().toISOString();
 
@@ -514,6 +684,10 @@ export class EngagementAnalysisServiceImpl
 
 返信: "${reply.body}"
 投稿者: ${reply.author}
+    ${replyEffectivenessContext ? `
+    ## 直近の返信効果
+    ${replyEffectivenessContext}
+    ` : ""}
 
 以下のJSON形式で回答:
 {

@@ -15,6 +15,7 @@ import { loadEnv } from "../config/env.js";
 import { ensureAutonomyTables } from "../db/bootstrap.js";
 import { db } from "../db/index.js";
 import {
+  departmentNotifications,
   departmentRuns,
   departmentSummaries,
   heartbeatStates,
@@ -390,11 +391,10 @@ await runJob(
       );
       const departments = [
         "command",
-        "research",
+        "external-research",
+        "competitive-analysis",
         "threads",
         "note",
-        "community",
-        "optimization",
       ] as const;
       for (const dept of departments) {
         budgetService.initBudget(
@@ -584,9 +584,23 @@ await runJob(
           continue;
         }
 
-        // ── Step 6: Department execution ────────────────────────
+        // ── Step 6: Department execution with executive instruction ────
         try {
-          const execution = await departmentExecution.execute(action);
+          const instruction = cycle.departmentInstructions?.[department];
+          if (instruction) {
+            db.insert(departmentNotifications)
+              .values({
+                id: randomUUID(),
+                fromDepartment: "command",
+                toDepartment: department,
+                notificationType: "instruction",
+                content: instruction,
+                readAt: null,
+                createdAt: new Date().toISOString(),
+              })
+              .run();
+          }
+          const execution = await departmentExecution.execute(action, instruction);
           results.push(execution.summary);
 
           // Record budget spend
