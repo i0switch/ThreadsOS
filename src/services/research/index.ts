@@ -70,23 +70,30 @@ export class ResearchServiceImpl implements ResearchService {
       ? `\n## 既存メモリ/RAG参照\n${retrievalContext}\n`
       : "";
 
-    const query = `${topicName} Threads 投稿 コツ`;
+    // ── 複数クエリで市場動向・ジャンル理解も収集 ──
+    const queries = [
+      `${topicName} Threads 投稿 コツ`,
+      `${topicName} 市場動向 トレンド ${new Date().getFullYear()}`,
+      `${topicName} 需要 競争 ニッチ`,
+    ];
     let webResultsStr = "";
     const sourceUrls: string[] = [];
 
-    try {
-      const searchResults = await this.webSearchClient.search(query, {
-        count: 3,
-      });
-      if (searchResults.length > 0) {
-        webResultsStr = `\n## Web検索結果\n${searchResults.map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n内容: ${r.snippet}`).join("\n\n")}\n`;
-        sourceUrls.push(...searchResults.map((r) => r.url));
+    for (const query of queries) {
+      try {
+        const searchResults = await this.webSearchClient.search(query, {
+          count: 2,
+        });
+        if (searchResults.length > 0) {
+          webResultsStr += `\n## Web検索結果 (${query})\n${searchResults.map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n内容: ${r.snippet}`).join("\n\n")}\n`;
+          sourceUrls.push(...searchResults.map((r) => r.url));
+        }
+      } catch (e) {
+        logger.warn(
+          { error: e, query },
+          "Web search failed in researchTopic, falling back to LLM only",
+        );
       }
-    } catch (e) {
-      logger.warn(
-        { error: e },
-        "Web search failed in researchTopic, falling back to LLM only",
-      );
     }
 
     const searchInstruction = webResultsStr
@@ -99,19 +106,25 @@ ${profileSection}${retrievalSection}${webResultsStr}
 ## トピック
 ${topicName}
 
+## リサーチ観点
+1. コンテンツ素材: 投稿やnote記事のネタになる具体的な情報・データ・事例
+2. 市場動向: このジャンルの最新トレンド、需要の変化、競争密度
+3. ジャンル理解: このジャンル特有の文化・用語・ユーザー心理・成功パターン
+
 以下の形式でJSON配列を返してください:
 [
   {
     "source": "情報源の種類 (URLがわかる場合はURLを記載)",
     "content": "発見した情報・インサイト",
-    "evidenceType": "data" | "anecdote" | "expert" | "trend",
+    "evidenceType": "data" | "anecdote" | "expert" | "trend" | "market" | "genre_insight",
     "confidence": "high" | "medium" | "low"
   }
 ]
 
-5〜8件の有用なリサーチ結果を返してください。`;
+8〜12件の有用なリサーチ結果を返してください（コンテンツ素材5件、市場動向2-3件、ジャンル理解1-2件を目安に）。`;
 
     const raw = await llm.generate(prompt, {
+      label: "research-daily-topic",
       temperature: 0.5,
       tier: "standard",
     });
@@ -193,6 +206,37 @@ ${topicName}
       );
     }
 
+    // ── 市場動向・ジャンル理解の専用メモリ蓄積 ──
+    const marketInsights = items.filter(
+      (i) => i.evidenceType === "market" || i.evidenceType === "trend",
+    );
+    if (marketInsights.length > 0) {
+      const marketSummary = marketInsights
+        .map((i) => `- ${i.content}`)
+        .join("\n");
+      this.memoryService.set(
+        "persistent_policy",
+        "external-research",
+        `market_trend:${topicId}`,
+        marketSummary,
+      );
+    }
+
+    const genreInsights = items.filter(
+      (i) => i.evidenceType === "genre_insight",
+    );
+    if (genreInsights.length > 0) {
+      const genreSummary = genreInsights
+        .map((i) => `- ${i.content}`)
+        .join("\n");
+      this.memoryService.set(
+        "persistent_policy",
+        "external-research",
+        `genre_understanding:${topicId}`,
+        genreSummary,
+      );
+    }
+
     // Push notification to relevant departments
     if (items.length > 0) {
       const notification = {
@@ -202,7 +246,12 @@ ${topicName}
         highlights: items.slice(0, 3).map((i) => i.content.slice(0, 100)),
       };
       const notifNow = new Date().toISOString();
-      for (const dept of ["threads", "note", "competitive-analysis"] as const) {
+      for (const dept of [
+        "threads",
+        "note",
+        "competitive-analysis",
+        "command",
+      ] as const) {
         db.insert(departmentNotifications)
           .values({
             id: randomUUID(),
@@ -311,6 +360,7 @@ ${snapshotSummary}
 }`;
 
     const raw = await llm.generate(prompt, {
+      label: "research-competitor-analysis",
       temperature: 0.3,
       tier: "standard",
     });

@@ -556,6 +556,7 @@ ${JSON.stringify(
     let insights: NoteEngagementInsight[] = [];
     try {
       const raw = await llm.generate(prompt, {
+        label: "note-engagement-insight-generation",
         temperature: 0.4,
         tier: "premium",
       });
@@ -644,6 +645,7 @@ ${JSON.stringify(
 
     try {
       const raw = await llm.generate(prompt, {
+        label: "note-threads-correlation-analysis",
         temperature: 0.3,
         tier: "standard",
       });

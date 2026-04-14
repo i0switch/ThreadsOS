@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import {
+  competitorSnapshots,
   contentSlots,
   humanInputs,
   noteDrafts,
@@ -31,7 +32,8 @@ export type ActionType =
   | "optimize_schedule"
   | "weekly_retro"
   | "notify"
-  | "analyze_competitors";
+  | "analyze_competitors"
+  | "fetch_competitor_updates";
 
 export interface ScheduledAction {
   type: ActionType;
@@ -58,6 +60,24 @@ type PersistedStrategyState = {
     | "funnel_expansion"
     | "engagement_compounding";
   funnelStage?: "bootstrap" | "distribution" | "conversion" | "optimization";
+  policies?: {
+    brand?: {
+      tone?: string;
+      topicsToAvoid?: string[];
+      topicsToEmphasize?: string[];
+      contentGuards?: string;
+    };
+    growth?: {
+      channelFocus: ("threads" | "note")[];
+      contentFrequency: "aggressive" | "steady" | "conservative";
+      audienceStrategy?: string;
+    };
+    monetization?: {
+      priceStrategy?: string;
+      conversionFocus?: string;
+      revenueTarget?: "growth" | "maintain" | "experiment";
+    };
+  };
 };
 
 function getJstHour(date = new Date()): number {
@@ -193,6 +213,48 @@ function applyStrategyBias(actions: ScheduledAction[]): ScheduledAction[] {
             delta -= 1;
           }
           break;
+      }
+
+      // ── 多軸ポリシーによる追加バイアス ──
+      if (strategy.policies) {
+        const growth = strategy.policies.growth;
+        const monetization = strategy.policies.monetization;
+
+        // Growth policy: チャネルフォーカスに応じたバイアス
+        if (growth?.contentFrequency === "aggressive") {
+          if (
+            action.type === "generate_and_post" ||
+            action.type === "generate_note"
+          )
+            delta -= 1;
+        } else if (growth?.contentFrequency === "conservative") {
+          if (
+            action.type === "generate_and_post" ||
+            action.type === "generate_note"
+          )
+            delta += 1;
+        }
+
+        // Growth policy: チャネルフォーカス
+        if (growth && !growth.channelFocus.includes("threads")) {
+          if (
+            action.type === "generate_and_post" ||
+            action.type === "research_threads"
+          )
+            delta += 2;
+        }
+        if (growth && !growth.channelFocus.includes("note")) {
+          if (
+            action.type === "generate_note" ||
+            action.type === "research_note"
+          )
+            delta += 2;
+        }
+
+        // Monetization policy: 収益フォーカス時のnote優先
+        if (monetization?.revenueTarget === "growth") {
+          if (action.type === "generate_note") delta -= 1;
+        }
       }
 
       if (delta === 0) {
@@ -461,12 +523,30 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
     const competitorAnalysisAge = lastCompetitorAnalysis
       ? hoursBetween(now, lastCompetitorAnalysis.startedAt)
       : Number.POSITIVE_INFINITY;
-    if (competitorAnalysisAge >= 168) {
-      // 168時間 = 7日
+    if (competitorAnalysisAge >= 24) {
+      // 24時間 = 1日（旧: 168時間 = 7日）
       actions.push({
         type: "analyze_competitors",
         priority: 9,
         reason: `前回競合分析から${Math.floor(competitorAnalysisAge / 24)}日経過`,
+      });
+    }
+
+    // 競合スナップショット差分更新: 6時間間隔
+    const latestCompetitorSnapshot = db
+      .select()
+      .from(competitorSnapshots)
+      .orderBy(desc(competitorSnapshots.createdAt))
+      .limit(1)
+      .get();
+    const snapshotAge = latestCompetitorSnapshot
+      ? hoursBetween(now, latestCompetitorSnapshot.createdAt)
+      : Number.POSITIVE_INFINITY;
+    if (snapshotAge >= 6) {
+      actions.push({
+        type: "fetch_competitor_updates",
+        priority: 11,
+        reason: `前回競合スナップショットから${Math.floor(snapshotAge)}時間経過`,
       });
     }
 
@@ -641,9 +721,20 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       .from(noteDrafts)
       .where(eq(noteDrafts.status, "audited"))
       .all()
-      .filter((draft) => (draft.publishReadinessScore ?? 0) >= 7);
+      .filter((draft) => (draft.publishReadinessScore ?? 0) >= 6);
+
+    // 既存slotのscheduled_atを取得して重複回避
+    const existingSlotTimes = new Set(
+      db
+        .select()
+        .from(contentSlots)
+        .where(eq(contentSlots.channel, "note"))
+        .all()
+        .map((s) => s.scheduledAt),
+    );
 
     let inserted = 0;
+    let dayOffset = 0;
     for (const draft of auditedDrafts) {
       if (inserted >= maxSlots) {
         break;
@@ -652,14 +743,22 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
         continue;
       }
 
+      // 既存とかぶらないscheduled_atを探す
+      let scheduledAt: string;
+      while (true) {
+        scheduledAt = new Date(
+          slotBase.getTime() + dayOffset * 86_400_000,
+        ).toISOString();
+        if (!existingSlotTimes.has(scheduledAt)) break;
+        dayOffset++;
+      }
+
       const idea = ideaMeta.get(draft.ideaId);
       db.insert(contentSlots)
         .values({
           id: randomUUID(),
           channel: "note",
-          scheduledAt: new Date(
-            slotBase.getTime() + inserted * 86_400_000,
-          ).toISOString(),
+          scheduledAt,
           topicId: idea?.topicId ?? null,
           draftId: draft.id,
           status: "pending",
@@ -668,8 +767,10 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
           updatedAt: now,
         })
         .run();
+      existingSlotTimes.add(scheduledAt);
       existingDraftIds.add(draft.id);
       inserted++;
+      dayOffset++;
     }
 
     return inserted;

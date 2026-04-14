@@ -236,6 +236,7 @@ ${resultLines}
 
     try {
       const raw = await llm.generate(prompt, {
+        label: "cadence-optimizer-analysis",
         temperature: 0.3,
         tier: "premium",
       });

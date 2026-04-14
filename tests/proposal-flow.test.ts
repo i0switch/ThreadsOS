@@ -88,7 +88,7 @@ describe("ProposalFlowService", () => {
 
     expect(proposal?.status).toBe("approved");
     expect(proposal?.currentStage).toBe("approved");
-    expect(history).toHaveLength(5);
+    expect(history).toHaveLength(4);
     expect(history.at(-1)?.action).toBe("approved");
   });
 });

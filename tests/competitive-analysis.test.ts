@@ -1,12 +1,25 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { sql } from "drizzle-orm";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DepartmentExecutionServiceImpl } from "../src/services/department-execution/index.js";
+import { departmentNotifications } from "../src/db/schema.js";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
 
+type Db = typeof import("../src/db/index.js")["db"];
+
+let db: Db;
+
 beforeAll(async () => {
+  ({ db } = await import("../src/db/index.js"));
   const { ensureAutonomyTables } = await import("../src/db/bootstrap.js");
   ensureAutonomyTables();
+});
+
+beforeEach(() => {
+  db.run(sql`DELETE FROM competitor_analyses`);
+  db.run(sql`DELETE FROM competitor_snapshots`);
+  db.run(sql`DELETE FROM department_notifications`);
 });
 
 describe("CompetitiveAnalysisExecutor", () => {
@@ -64,6 +77,12 @@ describe("CompetitiveAnalysisExecutor", () => {
   });
 
   it("executes competitor analysis and returns structured result", async () => {
+    const now = new Date().toISOString();
+    db.run(
+      sql`INSERT INTO competitor_snapshots (id, source, data, snapshot_date, created_at)
+          VALUES ('snapshot-1', 'https://example.com/threads/1', '具体数字と逆張りフックの投稿が高反応', ${now.split("T")[0]}, ${now})`,
+    );
+
     const service = buildService();
     const result = await service.execute({
       type: "analyze_competitors",
@@ -73,5 +92,30 @@ describe("CompetitiveAnalysisExecutor", () => {
     expect(result.department).toBe("competitive-analysis");
     expect(result.status).toBe("completed");
     expect(result.summary).toContain("競合分析");
+
+    const notifications = db
+      .select()
+      .from(departmentNotifications)
+      .all()
+      .sort((left, right) => left.toDepartment.localeCompare(right.toDepartment));
+
+    expect(notifications.map((row) => row.toDepartment)).toEqual([
+      "command",
+      "note",
+      "threads",
+    ]);
+    expect(
+      notifications.every(
+        (row) =>
+          row.fromDepartment === "competitive-analysis" &&
+          row.notificationType === "analysis_complete",
+      ),
+    ).toBe(true);
+
+    const commandNotification = notifications.find(
+      (row) => row.toDepartment === "command",
+    );
+    expect(commandNotification).toBeDefined();
+    expect(commandNotification!.content).toContain("combinedWinningPatterns");
   });
 });

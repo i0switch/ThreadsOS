@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import Fastify from "fastify";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearGlobalDashboardCache } from "../../src/services/dashboard-query/request-cache.js";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
@@ -227,11 +228,13 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  clearGlobalDashboardCache();
   await resetState();
   await seedState();
 });
 
 afterEach(async () => {
+  clearGlobalDashboardCache();
   await resetState();
 });
 

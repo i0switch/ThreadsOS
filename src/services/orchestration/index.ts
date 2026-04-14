@@ -32,8 +32,8 @@ import { ResearchServiceImpl } from "../research/index.js";
 import { createRetrievalService } from "../retrieval/index.js";
 import { TopicSelectionServiceImpl } from "../topic-selection/index.js";
 
-const MAX_THREAD_REVISION_ATTEMPTS = 3;
-const MAX_NOTE_REVISION_ATTEMPTS = 3;
+const MAX_THREAD_REVISION_ATTEMPTS = 2;
+const MAX_NOTE_REVISION_ATTEMPTS = 2;
 
 type NotePipelineTopic = {
   id: string;
@@ -73,6 +73,11 @@ export interface OrchestrationService {
   ): Promise<string>;
   processHumanInputs(llm: LlmClient, storage: StorageClient): Promise<string>;
   runNoteResearch(
+    llm: LlmClient,
+    storage: StorageClient,
+    dryRun?: boolean,
+  ): Promise<string>;
+  runThreadsResearch(
     llm: LlmClient,
     storage: StorageClient,
     dryRun?: boolean,
@@ -140,6 +145,67 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     }
 
     return { draft: currentDraft, audit };
+  }
+
+  // TODO: P1-A POC不合格 (2026-04-13, verdict 86.7%/90%) によりロールバック。
+  // 現状 未使用だがバッチ化の再設計ベースとして残置。再投入時は
+  // バッチサイズ3 + プロンプト強化 (各draft独立判定の明示) を検討。
+  private async settleThreadDraftsBatch(
+    drafts: ThreadPostDraft[],
+    llm: LlmClient,
+  ): Promise<Array<{ draft: ThreadPostDraft; audit: ThreadPostAudit }>> {
+    const completed = new Map<number, { draft: ThreadPostDraft; audit: ThreadPostAudit }>();
+    let queue = drafts.map((draft, index) => ({ index, draft }));
+
+    for (
+      let attempt = 0;
+      attempt <= MAX_THREAD_REVISION_ATTEMPTS && queue.length > 0;
+      attempt += 1
+    ) {
+      const auditMap = await this.postAuditService.auditDraftsBatch(
+        queue.map((item) => item.draft.id),
+        llm,
+      );
+      const nextQueue: Array<{ index: number; draft: ThreadPostDraft }> = [];
+
+      for (const item of queue) {
+        const audit = auditMap.get(item.draft.id);
+        if (!audit) {
+          throw new Error(`Batch audit result missing for draft: ${item.draft.id}`);
+        }
+
+        if (
+          audit.verdict !== "revise" ||
+          attempt >= MAX_THREAD_REVISION_ATTEMPTS
+        ) {
+          completed.set(item.index, { draft: item.draft, audit });
+          continue;
+        }
+
+        const feedback = this.buildThreadRevisionFeedback(audit);
+        if (!feedback) {
+          completed.set(item.index, { draft: item.draft, audit });
+          continue;
+        }
+
+        const regenerated = await this.postGenService.regenerateDraft(
+          item.draft.id,
+          feedback,
+          llm,
+        );
+        nextQueue.push({ index: item.index, draft: regenerated });
+      }
+
+      queue = nextQueue;
+    }
+
+    return drafts.map((_, index) => {
+      const settled = completed.get(index);
+      if (!settled) {
+        throw new Error(`Thread draft settlement incomplete at index ${index}`);
+      }
+      return settled;
+    });
   }
 
   private async settleNoteDraft(
@@ -407,6 +473,65 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     return `Researched note competitors for ${selectedTopics.length} topics. ${dryRun ? "(dry-run)" : ""}`;
   }
 
+  async runThreadsResearch(
+    llm: LlmClient,
+    storage: StorageClient,
+    dryRun = false,
+  ): Promise<string> {
+    logger.info({ dryRun }, "Starting Threads competitor research");
+
+    const selectedTopics = await this.topicService.selectDailyTopics(3);
+    if (selectedTopics.length === 0) {
+      return "No active topics found for Threads research.";
+    }
+
+    const results: string[] = [];
+
+    for (const topic of selectedTopics) {
+      if (dryRun) {
+        results.push(`[DRY-RUN] Would research Threads competitors for: ${topic.name}`);
+        continue;
+      }
+
+      // Web検索でThreads上の競合投稿・アカウントを調査
+      const items = await this.researchService.researchTopic(
+        topic.id,
+        `${topic.name} Threads投稿 人気 バズ`,
+        llm,
+      );
+
+      // 競合スナップショットとして保存 (threads_search: prefix で Threads 専用識別)
+      await this.researchService.saveCompetitorSnapshot(
+        `threads_search:${topic.name}`,
+        JSON.stringify(
+          items.map((i) => ({
+            source: i.source,
+            content: i.content,
+            evidenceType: i.evidenceType,
+          })),
+        ),
+      );
+
+      results.push(
+        `## ${topic.name}\nFound ${items.length} Threads competitor insights`,
+      );
+    }
+
+    // 競合分析を実行 (channel=threads で絞り込み)
+    const analysis = await this.researchService.analyzeCompetitorSnapshots(
+      llm,
+      "threads",
+    );
+
+    const date = new Date().toISOString().split("T")[0];
+    await storage.saveFile(
+      `docs/research/threads-competitor-research-${date}.md`,
+      `# Threads Competitor Research - ${date}\n\n${results.join("\n\n")}\n\n## Analysis\n${analysis.summary}`,
+    );
+
+    return `Researched Threads competitors for ${selectedTopics.length} topics, found ${analysis.winningPatterns.length} winning patterns. ${dryRun ? "(dry-run)" : ""}`;
+  }
+
   async runDailyTopicResearch(
     llm: LlmClient,
     storage: StorageClient,
@@ -536,6 +661,8 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       );
       totalDrafts += drafts.length;
 
+      // P1-A POC不合格 (verdict 86.7% < 90%) によりバッチ版から単発版へロールバック
+      // 不一致パターン: 単発=revise/medium → バッチ=pass/low (バッチが甘く判定)
       for (const draft of drafts) {
         const settled = await this.settleThreadDraft(draft, llm);
         if (settled.audit.verdict === "pass") passedDrafts++;

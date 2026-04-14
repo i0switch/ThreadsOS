@@ -14,7 +14,7 @@ export const researchItemSchema = z.object({
   topicId: z.string(),
   source: z.string(),
   content: z.string(),
-  evidenceType: z.enum(["data", "anecdote", "expert", "trend"]),
+  evidenceType: z.enum(["data", "anecdote", "expert", "trend", "market", "genre_insight"]),
   confidence: z.enum(["high", "medium", "low"]),
 });
 export type ResearchItem = z.infer<typeof researchItemSchema>;

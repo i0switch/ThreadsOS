@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { and, asc, count, desc, eq, gte } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import * as s from "../../db/schema.js";
+import { memoizeDashboardQuery } from "./request-cache.js";
+import { AGENTS } from "../runtime-state/index.js";
 
 function ago(hours: number): string {
   return new Date(Date.now() - hours * 3600_000).toISOString();
@@ -42,7 +44,7 @@ function recordProposalEvent(params: {
     .run();
 }
 
-function readStrategyState() {
+function readStrategyStateImpl() {
   const row = db
     .select()
     .from(s.strategyStates)
@@ -65,6 +67,10 @@ function readStrategyState() {
     activeActionTypes?: string[];
     insightFocus?: string[];
   };
+}
+
+function readStrategyState() {
+  return memoizeDashboardQuery("readStrategyState", [], readStrategyStateImpl);
 }
 
 function sumBy<T>(rows: T[], pick: (row: T) => number): number {
@@ -97,7 +103,7 @@ function latestRowsByKey<T>(
 }
 
 const DEPARTMENT_DISPLAY_NAMES: Record<string, string> = {
-  command: "管理指揮",
+  command: "管理・指揮系統",
   "external-research": "外部リサーチ",
   "competitive-analysis": "競合リサーチ分析",
   threads: "Threads運用",
@@ -108,7 +114,7 @@ const DEPARTMENT_DISPLAY_NAMES: Record<string, string> = {
 const WORKSTREAM_DEFINITIONS = [
   {
     id: "command",
-    label: "管理指揮",
+    label: "管理・指揮系統",
     departments: ["command"],
   },
   {
@@ -202,7 +208,19 @@ function humanizeInternalText(value: string | null | undefined): string | null {
     [/Auto-published (\d+) notes?/g, "note記事を$1件自動公開"],
     [/Adjusted by cadence optimizer/g, "投稿ペースを自動調整"],
     [/No draft-bound pending slots to reschedule/g, "動かせる予約枠がなく、時間調整は見送り"],
+    [/Note schedule optimized/g, "noteスケジュールを調整した"],
+    [/Schedule optimized/g, "スケジュールを調整した"],
     [/Progress notification sent/g, "進捗共有を送信"],
+    [/Would process (\d+) recent posts? for followup\.?/g, "直近$1件の投稿をフォローアップ予定"],
+    [/Processed (\d+) posts? for post publish followup\.?/g, "$1件の投稿をフォローアップ処理"],
+    [/No posts found for followup in the last 24 hours\.?/g, "直近24時間にフォローアップ対象の投稿なし"],
+    [/Researched (\d+) topics?\.?/g, "$1テーマをリサーチ"],
+    [/\[DRY-RUN\] Would generate note drafts from winning themes\.?/g, "(テスト) 勝ちテーマからnote下書きを生成予定"],
+    [/\[HEARTBEAT\] LLM task [a-f0-9-]+ timed out after \d+/g, "LLMタスクがタイムアウト"],
+    [/\[HEARTBEAT\] LLM task [a-f0-9-]+ failed: .*/g, "LLMタスクが失敗"],
+    [/Too many parameter values were provided/g, "パラメータが多すぎてエラー"],
+    [/NOT NULL constraint failed: .*/g, "データ保存エラー（必須項目が空）"],
+    [/fetch failed/g, "外部通信に失敗"],
     [/\bnightly-note-pipeline\b/g, "夜間note運用"],
     [/\bhourly-heartbeat\b/g, "定期チェック"],
     [/\bnote-competitor-research\b/g, "note競合リサーチ"],
@@ -218,6 +236,12 @@ function humanizeInternalText(value: string | null | undefined): string | null {
     [/\bresearch_thread\b/g, "Threadsリサーチ"],
     [/\breply_safe\b/g, "安全に返信"],
     [/\bfetch_engagement\b/g, "反応確認"],
+    [/\banalyze_competitors\b/g, "競合分析の実行"],
+    [/\bfetch_competitor_updates\b/g, "競合データの更新"],
+    [/\boptimize_schedule\b/g, "投稿スケジュールの最適化"],
+    [/\bweekly_retro\b/g, "週次振り返り"],
+    [/\bnotify\b/g, "進捗通知の送信"],
+    [/\bprocess_human_inputs\b/g, "ユーザー入力の処理"],
     [/\bworking\b/g, "実行中"],
     [/\bidle\b/g, "待機中"],
     [/\bpaused\b/g, "停止中"],
@@ -250,6 +274,48 @@ function humanizePolicyText(value: string | null | undefined): string | null {
     .replace(/ \/\s/g, " → ")
     .replace(/\[方針:([^\]]+)\]/g, "（方針:$1）")
     .trim();
+}
+
+const OBJECTIVE_LABELS: Record<string, string> = {
+  directive_assimilation: "指示吸収フェーズ",
+  funnel_expansion: "ファネル拡大フェーズ",
+  engagement_compounding: "エンゲージメント強化フェーズ",
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  generate_and_post: "Threads投稿の生成と公開",
+  generate_note: "note記事の生成",
+  fetch_engagement: "エンゲージメントの取得",
+  reply_safe: "安全なリプライの送信",
+  optimize_schedule: "投稿スケジュールの最適化",
+  research_threads: "Threadsテーマのリサーチ",
+  research_note: "note競合のリサーチ",
+  analyze_competitors: "競合分析の実行",
+  fetch_competitor_updates: "競合データの更新",
+  weekly_retro: "週次振り返り",
+  notify: "進捗通知の送信",
+  process_human_inputs: "ユーザー入力の処理",
+};
+
+const PREFERRED_WORKERS: Record<string, string> = {
+  research_threads: "trend-researcher",
+  research_note: "note-competitor-researcher",
+  generate_and_post: "threads-post-generator",
+  generate_note: "note-article-generator",
+  fetch_engagement: "threads-engagement-analyst",
+  reply_safe: "threads-reply-generator",
+  weekly_retro: "threads-operations-director",
+  optimize_schedule: "threads-operations-director",
+  notify: "executive-director",
+  process_human_inputs: "executive-director",
+  analyze_competitors: "engagement-analyst",
+  fetch_competitor_updates: "threads-competitor-researcher",
+};
+
+function resolveAgentName(actionType: string): string {
+  const agentId = PREFERRED_WORKERS[actionType];
+  const agent = agentId ? AGENTS.find((a) => a.id === agentId) : null;
+  return agent?.name ?? actionType;
 }
 
 function buildDerivedKpis() {
@@ -439,7 +505,7 @@ function legacyProposalRows(): DashboardProposalRow[] {
     }));
 }
 
-function currentProposalRows(status?: string): DashboardProposalRow[] {
+function currentProposalRowsImpl(status?: string): DashboardProposalRow[] {
   const rows = db
     .select()
     .from(s.proposals)
@@ -462,6 +528,12 @@ function currentProposalRows(status?: string): DashboardProposalRow[] {
   return status
     ? legacyRows.filter((row) => row.status === status)
     : legacyRows;
+}
+
+function currentProposalRows(status?: string): DashboardProposalRow[] {
+  return memoizeDashboardQuery("currentProposalRows", [status ?? null], () =>
+    currentProposalRowsImpl(status),
+  );
 }
 
 export interface DashboardSummary {
@@ -588,7 +660,7 @@ export interface DashboardSummary {
   }>;
 }
 
-export function getSummary(): DashboardSummary {
+function getSummaryImpl(): DashboardSummary {
   const now24h = ago(24);
   const now7d = ago(24 * 7);
   const strategyState = readStrategyState();
@@ -1025,7 +1097,7 @@ export function getSummary(): DashboardSummary {
         threadsStatus === "running"
           ? "集客用の投稿運用は回っている"
           : threadsStatus === "attention"
-            ? "投稿運用は動いているが、確認待ちや失敗が混ざっている"
+            ? "投稿運用は動いているが、一部に停滞や再試行がある"
             : "投稿生成か公開のどこかで止まっている",
       blockers: threadsBlockers,
       nextStep:
@@ -1163,10 +1235,8 @@ export function getSummary(): DashboardSummary {
     `Threadsは${operationalStatusLabel(threadsStatus)}`,
     `noteは${operationalStatusLabel(noteStatus)}`,
     pendingReviews + pendingProposals > 0
-      ? `要確認が${pendingReviews + pendingProposals}件`
-      : health === "ok"
-        ? "大きな確認待ちはなし"
-        : null,
+      ? `AIが${pendingReviews + pendingProposals}件の判断を処理中`
+      : null,
   ].filter((value): value is string => value !== null);
 
   return {
@@ -1215,6 +1285,10 @@ export function getSummary(): DashboardSummary {
     departmentHighlights,
     agentHighlights,
   };
+}
+
+export function getSummary(): DashboardSummary {
+  return memoizeDashboardQuery("getSummary", [], getSummaryImpl);
 }
 
 type StoryboardStatus = "working" | "attention" | "stalled" | "idle";
@@ -1525,6 +1599,19 @@ export interface DashboardHomeResponse {
     noteAction: string;
     blocker: string | null;
   };
+  currentFlow: {
+    nowRunning: string;
+    stoppedReason: string | null;
+    nextHumanAction: string | null;
+    nextAiAction: string;
+    funnelBottleneck: string | null;
+    growthHint: string | null;
+  };
+  revenueSummary: {
+    value: string;
+    trend: string;
+    context: string;
+  };
 }
 
 export interface DashboardInboxResponse {
@@ -1596,6 +1683,7 @@ export interface DashboardDecisionFeedResponse {
 
 export interface DashboardTimelineResponse {
   generatedAt: string;
+  humanEventCount: number;
   events: Array<{
     id: string;
     at: string;
@@ -1700,7 +1788,7 @@ export function getDashboardFunnel(): DashboardFunnelResponse {
       status === "working"
         ? "Threadsで集客し、noteで収益化する流れが動いている"
         : status === "attention"
-          ? "導線は動いているが、どこかに確認待ちや失敗が混ざっている"
+          ? "導線は動いているが、一部に停滞がある。AIが対処中"
           : status === "stalled"
             ? "集客から収益化までの流れのどこかで止まりが出ている"
             : "導線は待機中",
@@ -2184,13 +2272,15 @@ export function getDashboardHome(): DashboardHomeResponse {
     heartbeatLoop,
     stoppedItems,
     awaitingConfirmation: {
-      count: inbox.items.length,
-      urgentCount: inbox.items.filter((item) => item.level === "critical").length,
-      summary:
-        inbox.items.length > 0
-          ? "通常はAIだけで回る。いまは例外的に止まりや判断待ちが出ている"
-          : "いまは例外対応なし。AIチームだけで継続運用できている",
-      preview: inbox.items.slice(0, 3).map((item) => ({
+      count: inbox.items.filter((item) => item.kind !== "stall").length,
+      urgentCount: inbox.items.filter((item) => item.kind !== "stall" && item.level === "critical").length,
+      summary: (() => {
+        const decisions = inbox.items.filter((item) => item.kind !== "stall");
+        return decisions.length > 0
+          ? "通常はAIだけで回る。いまは例外的に判断待ちが出ている"
+          : "いまは判断待ちなし。AIチームだけで継続運用できている";
+      })(),
+      preview: inbox.items.filter((item) => item.kind !== "stall").slice(0, 3).map((item) => ({
         id: item.id,
         title: item.title,
         team: item.team,
@@ -2239,6 +2329,46 @@ export function getDashboardHome(): DashboardHomeResponse {
       noteAction:
         funnel.stages.find((item) => item.id === "note")?.headline ?? "-",
       blocker: funnel.blockers[0] ?? null,
+    },
+    currentFlow: {
+      nowRunning: summary.heartbeatFreshness === "fresh"
+        ? `定期チェックが正常稼働中。今日の実行: ${totalTodayRuns}回`
+        : summary.heartbeatFreshness === "stale"
+          ? "定期チェックに遅延あり"
+          : "定期チェックが停止中",
+      stoppedReason: stoppedItems.length > 0
+        ? stoppedItems.map((item) => `${item.label}: ${item.reason}`).join(" / ")
+        : null,
+      nextHumanAction: inbox.items.filter((item) => item.kind !== "stall").length > 0
+        ? inbox.items.filter((item) => item.kind !== "stall")[0].title
+        : null,
+      nextAiAction: aiActivity.length > 0
+        ? aiActivity[0].title
+        : "次の定期チェックで自動判断",
+      funnelBottleneck: funnel.blockers.length > 0
+        ? funnel.blockers[0]
+        : null,
+      growthHint: (() => {
+        if (summary.notes7d.revenueYen === 0 && notePublishCount === 0) {
+          return "まずnote記事を1本公開すると、収益化導線が動き始める";
+        }
+        if (summary.notes7d.revenueYen === 0 && notePublishCount > 0) {
+          return "記事は出ているが売上がまだない。価格設定や記事テーマの見直しで突破口をつくれる";
+        }
+        if (summary.threads24h.published === 0) {
+          return "Threads投稿が止まっている。集客導線を動かすには投稿再開が最優先";
+        }
+        return null;
+      })(),
+    },
+    revenueSummary: {
+      value: `¥${summary.notes7d.revenueYen.toLocaleString("ja-JP")}`,
+      trend: summary.notes7d.revenueYen > 0
+        ? `${summary.notes7d.published}本の記事から収益発生中`
+        : "まだ収益なし",
+      context: summary.notes7d.revenueYen > 0
+        ? `閲覧 ${summary.notes7d.views.toLocaleString("ja-JP")} / いいね ${summary.notes7d.likes.toLocaleString("ja-JP")}`
+        : "記事の公開と価格設定が収益化の第一歩",
     },
   };
 }
@@ -2308,7 +2438,7 @@ export function getDashboardStoryboard(): DashboardStoryboardResponse {
     },
   ];
 
-  const teams = blueprints.map((blueprint) => {
+  const teams: DashboardStoryboardResponse["teams"] = blueprints.map((blueprint) => {
     const relevantDepartments = blueprint.departments
       .map((department) => departmentMap.get(department))
       .filter(
@@ -2383,6 +2513,45 @@ export function getDashboardStoryboard(): DashboardStoryboardResponse {
       blockers,
     };
   });
+
+  // 動的部署: blueprintsに含まれない部署を自動追加
+  const coveredDepartments = new Set(blueprints.flatMap((bp) => bp.departments));
+  for (const dept of departments) {
+    if (coveredDepartments.has(dept.department)) continue;
+    const detail = getDepartmentDetail(dept.department);
+    const deptAgents = agents.filter((a) => a.department === dept.department);
+    const deptBlockers = detail
+      ? unique(detail.signals.blockers.concat(dept.blockingReason ? [dept.blockingReason] : []))
+      : dept.blockingReason ? [dept.blockingReason] : [];
+    const deptOutputs = detail
+      ? unique(detail.signals.outputs.filter((v): v is string => !!v)).slice(0, 5)
+      : [];
+    const deptBasedOn = detail
+      ? unique(detail.signals.inputs.filter((v): v is string => !!v)).slice(0, 5)
+      : [];
+    const status = toStoryboardStatus({
+      paused: dept.paused,
+      stale: dept.stale,
+      hasBlocker: deptBlockers.length > 0,
+      activeAgents: dept.activeAgents,
+    });
+    teams.push({
+      id: dept.department,
+      label: departmentDisplayName(dept.department),
+      purpose: detail?.currentTheme ?? "動的に検出された部署",
+      nowDoing: deptOutputs[0] ?? deptBasedOn[0] ?? "いまの動きはまだ記録されていません",
+      basedOn: deptBasedOn,
+      handoffTo: "管理・指揮系統",
+      status,
+      statusLabel: storyboardStatusLabel(status),
+      waitingOnHuman: dept.pendingProposals > 0,
+      waitingReason: dept.pendingProposals > 0 ? `確認待ちの提案が ${dept.pendingProposals}件ある` : null,
+      memberSummary: `${deptAgents.length}人の担当AIが関与`,
+      members: deptAgents.map((a) => ({ id: a.id, name: a.name ?? a.jobName, role: a.role, status: a.status })),
+      outputs: deptOutputs,
+      blockers: deptBlockers,
+    });
+  }
 
   const threadsSnapshot = summary.channelSnapshots.find(
     (item) => item.channel === "threads",
@@ -2691,14 +2860,17 @@ export function getDashboardTimeline(): DashboardTimelineResponse {
     })),
   ];
 
+  const sortedEvents = events
+    .sort(
+      (left, right) =>
+        new Date(right.at).getTime() - new Date(left.at).getTime(),
+    )
+    .slice(0, 40);
+
   return {
     generatedAt: new Date().toISOString(),
-    events: events
-      .sort(
-        (left, right) =>
-          new Date(right.at).getTime() - new Date(left.at).getTime(),
-      )
-      .slice(0, 40),
+    humanEventCount: sortedEvents.filter((e) => e.actorType === "human").length,
+    events: sortedEvents,
   };
 }
 
@@ -2718,7 +2890,7 @@ export interface DepartmentOverview {
   blockingReason: string | null;
 }
 
-export function getDepartments(): DepartmentOverview[] {
+function getDepartmentsImpl(): DepartmentOverview[] {
   const departmentRuns = db
     .select()
     .from(s.departmentRuns)
@@ -2830,6 +3002,10 @@ export function getDepartments(): DepartmentOverview[] {
   });
 }
 
+export function getDepartments(): DepartmentOverview[] {
+  return memoizeDashboardQuery("getDepartments", [], getDepartmentsImpl);
+}
+
 export interface DepartmentDetail {
   department: string;
   currentTheme: string;
@@ -2886,7 +3062,7 @@ export interface DepartmentDetail {
   }>;
 }
 
-export function getDepartmentDetail(department: string): DepartmentDetail {
+function getDepartmentDetailImpl(department: string): DepartmentDetail {
   const runs = db
     .select()
     .from(s.departmentRuns)
@@ -3109,7 +3285,13 @@ export function getDepartmentDetail(department: string): DepartmentDetail {
   };
 }
 
-export function getReviews(status?: string) {
+export function getDepartmentDetail(department: string): DepartmentDetail {
+  return memoizeDashboardQuery("getDepartmentDetail", [department], () =>
+    getDepartmentDetailImpl(department),
+  );
+}
+
+function getReviewsImpl(status?: string) {
   const query = status
     ? db
         .select()
@@ -3118,6 +3300,12 @@ export function getReviews(status?: string) {
     : db.select().from(s.humanReviewItems);
 
   return query.orderBy(desc(s.humanReviewItems.createdAt)).limit(50).all();
+}
+
+export function getReviews(status?: string) {
+  return memoizeDashboardQuery("getReviews", [status ?? null], () =>
+    getReviewsImpl(status),
+  );
 }
 
 export function approveReview(id: string, note?: string) {
@@ -3553,7 +3741,7 @@ export function getKpi() {
   return [...legacyRows, ...buildDerivedKpis()];
 }
 
-export function getAgents() {
+function getAgentsImpl() {
   const statefulAgents = db
     .select()
     .from(s.agentStates)
@@ -3614,6 +3802,181 @@ export function getAgents() {
       : 0;
     return rightTime - leftTime;
   });
+}
+
+export function getAgents() {
+  return memoizeDashboardQuery("getAgents", [], getAgentsImpl);
+}
+
+// ── Recent Posts ─────────────────────────────────────────
+export function getRecentPosts() {
+  const posts = db
+    .select({
+      id: s.threadPostResults.id,
+      body: s.threadPostDrafts.body,
+      impressions: s.threadPostResults.impressions,
+      likes: s.threadPostResults.likes,
+      repliesCount: s.threadPostResults.repliesCount,
+      publishedAt: s.threadPostResults.publishedAt,
+    })
+    .from(s.threadPostResults)
+    .leftJoin(
+      s.threadPostDrafts,
+      eq(s.threadPostResults.draftId, s.threadPostDrafts.id),
+    )
+    .orderBy(desc(s.threadPostResults.publishedAt))
+    .limit(10)
+    .all()
+    .map((row) => ({
+      id: row.id,
+      body: row.body ? row.body.slice(0, 100) : "",
+      impressions: row.impressions,
+      likes: row.likes,
+      repliesCount: row.repliesCount,
+      publishedAt: row.publishedAt,
+    }));
+
+  const bestRow = db
+    .select({
+      id: s.threadPostResults.id,
+      body: s.threadPostDrafts.body,
+      impressions: s.threadPostResults.impressions,
+      likes: s.threadPostResults.likes,
+      repliesCount: s.threadPostResults.repliesCount,
+      publishedAt: s.threadPostResults.publishedAt,
+    })
+    .from(s.threadPostResults)
+    .leftJoin(
+      s.threadPostDrafts,
+      eq(s.threadPostResults.draftId, s.threadPostDrafts.id),
+    )
+    .orderBy(desc(s.threadPostResults.impressions))
+    .limit(1)
+    .get();
+
+  const bestPost = bestRow
+    ? {
+        id: bestRow.id,
+        body: bestRow.body ? bestRow.body.slice(0, 100) : "",
+        impressions: bestRow.impressions,
+        likes: bestRow.likes,
+        repliesCount: bestRow.repliesCount,
+        publishedAt: bestRow.publishedAt,
+      }
+    : null;
+
+  return { posts, bestPost };
+}
+
+// ── Recent Notes ─────────────────────────────────────────
+export function getRecentNotes() {
+  const published = db
+    .select()
+    .from(s.notePostResults)
+    .orderBy(desc(s.notePostResults.publishedAt))
+    .limit(5)
+    .all()
+    .map((row) => ({
+      id: row.id,
+      title: row.title ?? "",
+      noteUrl: row.noteUrl ?? null,
+      views: row.views,
+      likes: row.likes,
+      revenueYen: row.revenueYen,
+      publishedAt: row.publishedAt,
+    }));
+
+  const drafts = db
+    .select()
+    .from(s.noteDrafts)
+    .orderBy(desc(s.noteDrafts.createdAt))
+    .limit(5)
+    .all()
+    .map((row) => ({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      createdAt: row.createdAt,
+    }));
+
+  const thumbnailTasks = db
+    .select({
+      id: s.thumbnailTasks.id,
+      noteTitle: s.noteDrafts.title,
+      instruction: s.thumbnailTasks.instruction,
+      createdAt: s.thumbnailTasks.createdAt,
+    })
+    .from(s.thumbnailTasks)
+    .leftJoin(
+      s.noteDrafts,
+      eq(s.thumbnailTasks.noteDraftId, s.noteDrafts.id),
+    )
+    .where(eq(s.thumbnailTasks.status, "pending"))
+    .all()
+    .map((row) => ({
+      id: row.id,
+      noteTitle: row.noteTitle ?? "",
+      instruction: row.instruction ?? "",
+      createdAt: row.createdAt,
+    }));
+
+  return { published, drafts, thumbnailTasks };
+}
+
+// ── Heartbeat History ────────────────────────────────────
+export function getHeartbeatHistory() {
+  const cycles = db
+    .select()
+    .from(s.executiveCycles)
+    .orderBy(desc(s.executiveCycles.createdAt))
+    .limit(10)
+    .all();
+
+  return {
+    cycles: cycles.map((cycle) => {
+      const runs = db
+        .select()
+        .from(s.departmentRuns)
+        .where(eq(s.departmentRuns.cycleId, cycle.id))
+        .orderBy(asc(s.departmentRuns.createdAt))
+        .all()
+        .map((run) => ({
+          department: DEPARTMENT_DISPLAY_NAMES[run.department] ?? run.department,
+          actionType: ACTION_LABELS[run.phase] ?? run.phase,
+          status: run.status,
+          summary: humanizeInternalText(run.summary ?? ""),
+          agentName: resolveAgentName(run.phase),
+        }));
+
+      // Parse executive decision for reasoning and department instructions
+      let reasoning: string | null = null;
+      let departmentInstructions: Record<string, string> | null = null;
+      if (cycle.decisionJson) {
+        try {
+          const decision = JSON.parse(cycle.decisionJson);
+          reasoning = decision.reasoning ?? null;
+          if (decision.departmentInstructions) {
+            departmentInstructions = {};
+            for (const [k, v] of Object.entries(decision.departmentInstructions)) {
+              const label = DEPARTMENT_DISPLAY_NAMES[k] ?? k;
+              departmentInstructions[label] = v as string;
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
+
+      return {
+        id: cycle.id,
+        objective: OBJECTIVE_LABELS[cycle.objective] ?? cycle.objective,
+        funnelStage: cycle.funnelStage,
+        summary: humanizeInternalText(cycle.summary ?? ""),
+        reasoning,
+        departmentInstructions,
+        createdAt: cycle.createdAt,
+        runs,
+      };
+    }),
+  };
 }
 
 export function getAgentDetail(id: string) {

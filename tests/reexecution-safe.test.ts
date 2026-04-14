@@ -585,6 +585,38 @@ describe("re-execution safety", () => {
       }),
     };
     service.postAuditService = {
+      auditDraftsBatch: vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Map([
+            [
+              "thread-draft-1",
+              {
+                id: "thread-audit-1",
+                draftId: "thread-draft-1",
+                verdict: "revise",
+                severity: "medium",
+                reasons: ["具体性不足"],
+                suggestions: ["冒頭に具体例を入れる"],
+              },
+            ],
+          ]),
+        )
+        .mockResolvedValueOnce(
+          new Map([
+            [
+              "thread-draft-2",
+              {
+                id: "thread-audit-2",
+                draftId: "thread-draft-2",
+                verdict: "pass",
+                severity: "low",
+                reasons: ["十分に良い"],
+                suggestions: ["そのまま"],
+              },
+            ],
+          ]),
+        ),
       auditDraft: vi
         .fn()
         .mockResolvedValueOnce({
@@ -618,6 +650,81 @@ describe("re-execution safety", () => {
       expect.stringContaining("thread-draft-2.md"),
       expect.stringContaining("改善稿"),
     );
+  });
+
+  it("batch-audits thread drafts while preserving per-draft review state", async () => {
+    const service = new PostAuditServiceImpl();
+    const llm: LlmClient = {
+      audit: vi.fn(),
+      generate: vi.fn().mockResolvedValue(
+        JSON.stringify([
+          {
+            draftId: "draft-batch-1",
+            verdict: "pass",
+            severity: "low",
+            reasons: ["問題なし"],
+            suggestions: ["そのまま"],
+            score: 8,
+          },
+          {
+            draftId: "draft-batch-2",
+            verdict: "human_review",
+            severity: "high",
+            reasons: ["要確認"],
+            suggestions: ["人間確認"],
+            score: 4,
+          },
+        ]),
+      ),
+    };
+
+    const now = new Date().toISOString();
+    db.insert(schema.threadPostDrafts)
+      .values([
+        {
+          id: "draft-batch-1",
+          topicId: "topic-1",
+          body: "本文1",
+          hookType: "curiosity",
+          ctaType: "comment",
+          noteTransition: null,
+          status: "draft",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: "draft-batch-2",
+          topicId: "topic-1",
+          body: "本文2",
+          hookType: "story",
+          ctaType: "share",
+          noteTransition: null,
+          status: "draft",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ])
+      .run();
+
+    const results = await service.auditDraftsBatch(
+      ["draft-batch-1", "draft-batch-2"],
+      llm,
+    );
+
+    expect(results.get("draft-batch-1")?.verdict).toBe("pass");
+    expect(results.get("draft-batch-2")?.verdict).toBe("human_review");
+
+    const drafts = db
+      .select()
+      .from(schema.threadPostDrafts)
+      .all()
+      .sort((a, b) => a.id.localeCompare(b.id));
+    expect(drafts[0].status).toBe("audited");
+    expect(drafts[1].status).toBe("draft");
+
+    const reviewItems = db.select().from(schema.humanReviewItems).all();
+    expect(reviewItems).toHaveLength(1);
+    expect(reviewItems[0].itemId).toBe("draft-batch-2");
   });
 
   it("auto-revises note drafts until they pass audit", async () => {

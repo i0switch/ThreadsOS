@@ -92,6 +92,7 @@ export function resolveDepartmentName(
       }
       return "note";
     case "analyze_competitors":
+    case "fetch_competitor_updates":
       return "competitive-analysis";
     case "generate_and_post":
     case "fetch_engagement":

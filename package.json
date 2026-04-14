@@ -10,6 +10,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "job:heartbeat": "tsx src/jobs/hourly-heartbeat.ts",
     "job:heartbeat:dry": "tsx src/jobs/hourly-heartbeat.ts --dry-run",
+    "job:heartbeat:loop": "tsx src/jobs/heartbeat-loop.ts",
+    "job:heartbeat:loop:dry": "tsx src/jobs/heartbeat-loop.ts --dry-run",
     "job:daily-topic-research": "tsx src/jobs/daily-topic-research.ts",
     "job:daily-threads-plan": "tsx src/jobs/daily-threads-plan.ts",
     "job:post-publish-followup": "tsx src/jobs/post-publish-followup.ts",

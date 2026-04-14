@@ -9,6 +9,7 @@ import {
   humanReviewItems,
   improvementInsights,
   replyDecisions,
+  strategyStates,
   threadPostDrafts,
   threadPostResults,
   threadReplies,
@@ -657,18 +658,43 @@ export class EngagementAnalysisServiceImpl
     const replies = await api.getReplies(postResult.threadsPostId);
     const now = new Date().toISOString();
 
-    const classifyReply = async (reply: (typeof replies)[number]) => {
+    // ── エグゼクティブの返信ポリシーを一度だけ取得（バッチ全件で共有）──
+    const strategyRow = db
+      .select()
+      .from(strategyStates)
+      .where(eq(strategyStates.key, "heartbeat:global"))
+      .get();
+    let replyPolicyContext = "";
+    let toneContext = "";
+    if (strategyRow) {
+      try {
+        const state = JSON.parse(strategyRow.stateJson);
+        if (state.policies?.brand?.tone) {
+          toneContext = `\n返信トーン: ${state.policies.brand.tone}`;
+        }
+        if (state.policies?.brand?.topicsToAvoid?.length > 0) {
+          toneContext += `\n避けるべき話題: ${state.policies.brand.topicsToAvoid.join(", ")}`;
+        }
+      } catch {
+        // parse failure, skip
+      }
+      if (strategyRow.summary) {
+        replyPolicyContext = `\n## 現在の運用方針\n${strategyRow.summary}`;
+      }
+    }
+
+    // ── 新規返信のみ抽出して threadReplies にinsert ──
+    type NewReply = { replyId: string; reply: (typeof replies)[number] };
+    const newReplies: NewReply[] = [];
+    for (const reply of replies) {
       const existingReply = db
         .select()
         .from(threadReplies)
         .where(eq(threadReplies.threadsReplyId, reply.id))
         .get();
-      if (existingReply) {
-        return;
-      }
+      if (existingReply) continue;
 
       const replyId = randomUUID();
-
       db.insert(threadReplies)
         .values({
           id: replyId,
@@ -679,117 +705,179 @@ export class EngagementAnalysisServiceImpl
           createdAt: now,
         })
         .run();
+      newReplies.push({ replyId, reply });
+    }
 
-      const classificationPrompt = `以下の返信の危険度を判定してください。
+    if (newReplies.length === 0) {
+      logger.info(
+        { postResultId, replyCount: replies.length },
+        "Replies fetched, no new items to classify",
+      );
+      return;
+    }
 
-返信: "${reply.body}"
-投稿者: ${reply.author}
-    ${replyEffectivenessContext ? `
-    ## 直近の返信効果
-    ${replyEffectivenessContext}
-    ` : ""}
+    type ReplyClassification = {
+      threadsReplyId: string;
+      decision: string;
+      sentiment: string;
+      autoReplyBody?: string;
+      reason?: string;
+    };
 
-以下のJSON形式で回答:
-{
-  "decision": "safe_auto_reply" | "human_review" | "ignore",
-  "sentiment": "positive" | "negative" | "neutral" | "question",
-  "autoReplyBody": "返信文(safe_auto_replyの場合のみ)",
-  "reason": "判定理由"
-}
+    const classifyBatch = async (
+      batch: NewReply[],
+    ): Promise<Map<string, ReplyClassification>> => {
+      const listSection = batch
+        .map(
+          (item, i) =>
+            `${i + 1}. threadsReplyId="${item.reply.id}" author="${item.reply.author}" body="${item.reply.body.replace(/"/g, "'")}"`,
+        )
+        .join("\n");
+
+      const batchPrompt = `以下の${batch.length}件の返信を一括で危険度判定してください。
+
+${replyEffectivenessContext ? `## 直近の返信効果\n${replyEffectivenessContext}\n\n` : ""}${replyPolicyContext ? `${replyPolicyContext}\n\n` : ""}${toneContext ? `${toneContext}\n\n` : ""}## 返信一覧
+${listSection}
+
+## 回答形式 (JSON配列)
+[
+  {
+    "threadsReplyId": "入力に対応するthreadsReplyId",
+    "decision": "safe_auto_reply" | "human_review" | "ignore",
+    "sentiment": "positive" | "negative" | "neutral" | "question",
+    "autoReplyBody": "返信文(safe_auto_replyの場合のみ)",
+    "reason": "判定理由"
+  }
+]
 
 判定基準:
 - 攻撃的・挑発的 → human_review
 - 医療・法律・投資の質問 → human_review
 - 好意的な感想 → safe_auto_reply
 - 質問 → safe_auto_reply (安全な範囲で)
-- スパム → ignore`;
+- スパム → ignore
+- ブランドポリシーに反する内容 → human_review
 
-      const raw = await llm.generate(classificationPrompt, {
+必ず${batch.length}件全てに対して判定結果を返してください。JSON配列のみ、前置き・コードブロックなし。`;
+
+      let raw = await llm.generate(batchPrompt, {
+        label: "engagement-reply-classification-batch",
         temperature: 0.3,
         tier: "fast",
       });
-      let classification: {
-        decision: string;
-        sentiment: string;
-        autoReplyBody?: string;
-        reason?: string;
-      };
-      classification = parseJsonObject<{
-        decision: string;
-        sentiment: string;
-        autoReplyBody?: string;
-        reason?: string;
-      }>(raw) ?? { decision: "human_review", sentiment: "neutral" };
+      let arr = parseJsonArray<ReplyClassification>(raw);
 
-      db.update(threadReplies)
-        .set({ sentiment: classification.sentiment })
-        .where(eq(threadReplies.id, replyId))
-        .run();
+      if (!arr || arr.length === 0) {
+        logger.warn(
+          { batchSize: batch.length },
+          "Reply batch classification parse failed, retrying once",
+        );
+        raw = await llm.generate(batchPrompt, {
+          label: "engagement-reply-classification-batch-retry",
+          temperature: 0.2,
+          tier: "fast",
+        });
+        arr = parseJsonArray<ReplyClassification>(raw);
+      }
 
-      db.insert(replyDecisions)
-        .values({
-          id: randomUUID(),
-          replyId,
-          decision: classification.decision,
-          autoReplyBody:
-            classification.decision === "safe_auto_reply"
-              ? classification.autoReplyBody
-              : null,
-          createdAt: now,
-        })
-        .run();
-
-      if (classification.decision === "human_review") {
-        const existingReviewItem = db
-          .select()
-          .from(humanReviewItems)
-          .where(
-            and(
-              eq(humanReviewItems.itemType, "thread_reply"),
-              eq(humanReviewItems.itemId, replyId),
-            ),
-          )
-          .get();
-
-        if (existingReviewItem) {
-          db.update(humanReviewItems)
-            .set({
-              reason:
-                classification.reason ??
-                "LLM classified as requiring human review",
-              status: "pending",
-              reviewedAt: null,
-              reviewerNote: null,
-              createdAt: now,
-            })
-            .where(eq(humanReviewItems.id, existingReviewItem.id))
-            .run();
-        } else {
-          db.insert(humanReviewItems)
-            .values({
-              id: randomUUID(),
-              itemType: "thread_reply",
-              itemId: replyId,
-              reason:
-                classification.reason ??
-                "LLM classified as requiring human review",
-              status: "pending",
-              createdAt: now,
-            })
-            .run();
+      const map = new Map<string, ReplyClassification>();
+      if (arr) {
+        for (const item of arr) {
+          if (item && item.threadsReplyId) {
+            map.set(item.threadsReplyId, item);
+          }
         }
       }
+      return map;
     };
 
-    const maxConcurrent = 5;
-    for (let index = 0; index < replies.length; index += maxConcurrent) {
-      const chunk = replies.slice(index, index + maxConcurrent);
-      await Promise.all(chunk.map((reply) => classifyReply(reply)));
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < newReplies.length; i += BATCH_SIZE) {
+      const batch = newReplies.slice(i, i + BATCH_SIZE);
+      const results = await classifyBatch(batch);
+
+      for (const { replyId, reply } of batch) {
+        let classification = results.get(reply.id);
+        if (!classification) {
+          logger.warn(
+            { replyId, threadsReplyId: reply.id },
+            "Reply classification missing from batch result, defaulting to ignore",
+          );
+          classification = {
+            threadsReplyId: reply.id,
+            decision: "ignore",
+            sentiment: "neutral",
+          };
+        }
+
+        db.update(threadReplies)
+          .set({ sentiment: classification.sentiment })
+          .where(eq(threadReplies.id, replyId))
+          .run();
+
+        db.insert(replyDecisions)
+          .values({
+            id: randomUUID(),
+            replyId,
+            decision: classification.decision,
+            autoReplyBody:
+              classification.decision === "safe_auto_reply"
+                ? classification.autoReplyBody ?? null
+                : null,
+            createdAt: now,
+          })
+          .run();
+
+        if (classification.decision === "human_review") {
+          const existingReviewItem = db
+            .select()
+            .from(humanReviewItems)
+            .where(
+              and(
+                eq(humanReviewItems.itemType, "thread_reply"),
+                eq(humanReviewItems.itemId, replyId),
+              ),
+            )
+            .get();
+
+          if (existingReviewItem) {
+            db.update(humanReviewItems)
+              .set({
+                reason:
+                  classification.reason ??
+                  "LLM classified as requiring human review",
+                status: "pending",
+                reviewedAt: null,
+                reviewerNote: null,
+                createdAt: now,
+              })
+              .where(eq(humanReviewItems.id, existingReviewItem.id))
+              .run();
+          } else {
+            db.insert(humanReviewItems)
+              .values({
+                id: randomUUID(),
+                itemType: "thread_reply",
+                itemId: replyId,
+                reason:
+                  classification.reason ??
+                  "LLM classified as requiring human review",
+                status: "pending",
+                createdAt: now,
+              })
+              .run();
+          }
+        }
+      }
     }
 
     logger.info(
-      { postResultId, replyCount: replies.length },
-      "Replies fetched and classified",
+      {
+        postResultId,
+        replyCount: replies.length,
+        newCount: newReplies.length,
+      },
+      "Replies fetched and classified (batched)",
     );
   }
 
@@ -824,6 +912,7 @@ export class EngagementAnalysisServiceImpl
 action は「何をどう変えるか」がすぐ分かる粒度で返してください。`;
 
     const raw = await llm.generate(prompt, {
+      label: "engagement-post-insight-generation",
       temperature: 0.5,
       tier: "premium",
     });
@@ -909,6 +998,6 @@ ${refreshed.summaryLines.map((line) => `- ${line}`).join("\n")}
 4. 来週の実験案
 5. 投稿時間・テーマ・フック・CTAの改善方針`;
 
-    return llm.generate(prompt, { temperature: 0.6, tier: "standard" });
+    return llm.generate(prompt, { temperature: 0.6, tier: "standard", label: "engagement-weekly-report" });
   }
 }

@@ -77,6 +77,7 @@ ${noteThemeSection}
 ]`;
 
     const raw = await llm.generate(prompt, {
+      label: "threads-draft-generation",
       temperature: 0.8,
       systemPrompt:
         "Return ONLY a valid JSON array as requested. No explanation, no preamble, no markdown code blocks.",
@@ -190,6 +191,7 @@ ${noteThemeSection}
       ? `\n## 運用者プロフィール\n${profileText}\n`
       : "";
 
+    // P1-C ロールバック (2026-04-14): 実測で効果なし+cost増のため順序戻し
     const prompt = `以下の投稿を改善してください。
 ${profileSection}
 ## 元の投稿
@@ -208,6 +210,7 @@ ${feedback}
 
     const raw = await llm.generate(prompt, {
       temperature: 0.7,
+      label: "threads-regenerate-draft",
       tier: "standard",
     });
     const parsed = parseJsonObject<{

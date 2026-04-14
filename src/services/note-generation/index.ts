@@ -195,6 +195,7 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}
 ["タイトル1", "タイトル2", "タイトル3", "タイトル4", "タイトル5"]`;
 
     const raw = await llm.generate(prompt, {
+      label: "note-title-generation",
       temperature: 0.8,
       tier: "fast",
     });
@@ -235,7 +236,7 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrieval
 
 マークダウン形式で返してください。`;
 
-    return llm.generate(prompt, { temperature: 0.6, tier: "standard" });
+    return llm.generate(prompt, { temperature: 0.6, tier: "standard", label: "note-outline-generation" });
   }
 
   async generateDraft(
@@ -280,6 +281,13 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrieval
 - 有料部分にするなら、最も価値のある部分を後半に置く
 - CTAは自然に
 
+## 重要な禁止事項
+- [要入力]や[ここに入力]などのプレースホルダーは絶対に使わないこと
+- 具体的なデータがない場合は、一般的な表現で代替すること
+- 例: 「[著者名]」→ 削除して一般的な表現を使う
+- 例: 「[URL]」→ 削除してCTAの文言だけにする
+- 例: 「[数字]」→ 「多くの」「数十件の」など一般的な表現に置き換える
+
 本文のみをマークダウンで返してください。`;
 
     const ctaPrompt = `以下のnote記事に適したCTAを1つ作成してください。自然で押し付けがましくないもの。
@@ -289,8 +297,8 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrieval
 
 CTAのテキストのみ返してください。`;
     const [body, cta] = await Promise.all([
-      llm.generate(prompt, { temperature: 0.7, tier: "standard" }),
-      llm.generate(ctaPrompt, { temperature: 0.5, tier: "fast" }),
+      llm.generate(prompt, { temperature: 0.7, tier: "standard", label: "note-body-generation" }),
+      llm.generate(ctaPrompt, { temperature: 0.5, tier: "fast", label: "note-cta-generation" }),
     ]);
 
     const id = randomUUID();
@@ -357,9 +365,17 @@ ${existing.body}
 ## フィードバック
 ${feedback}
 
+## 重要な禁止事項
+- [要入力]や[ここに入力]などのプレースホルダーは絶対に使わないこと
+- 具体的なデータがない場合は、一般的な表現で代替すること
+- 例: 「[著者名]」→ 削除して一般的な表現を使う
+- 例: 「[URL]」→ 削除してCTAの文言だけにする
+- 例: 「[数字]」→ 「多くの」「数十件の」など一般的な表現に置き換える
+
 改善版の本文のみをマークダウンで返してください。`;
 
     const body = await llm.generate(prompt, {
+      label: "note-regenerate-draft",
       temperature: 0.6,
       tier: "standard",
     });

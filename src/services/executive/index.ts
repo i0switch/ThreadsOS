@@ -27,6 +27,50 @@ import type {
 } from "../content-scheduler/index.js";
 import { parseJsonObject } from "../../utils/llm-json.js";
 
+export interface BrandPolicy {
+  tone: "professional" | "casual" | "bold" | "educational";
+  topicsToAvoid: string[];
+  topicsToEmphasize: string[];
+  contentGuards: "strict" | "moderate" | "permissive";
+}
+
+export interface GrowthPolicy {
+  channelFocus: ("threads" | "note")[];
+  contentFrequency: "aggressive" | "steady" | "conservative";
+  audienceStrategy: "existing" | "adjacent" | "new";
+}
+
+export interface MonetizationPolicy {
+  priceStrategy: "premium" | "standard" | "value";
+  conversionFocus: "direct" | "nurture" | "educational";
+  revenueTarget: "growth" | "maintain" | "experiment";
+}
+
+export interface StrategyPolicies {
+  brand: BrandPolicy;
+  growth: GrowthPolicy;
+  monetization: MonetizationPolicy;
+}
+
+export const DEFAULT_POLICIES: StrategyPolicies = {
+  brand: {
+    tone: "casual",
+    topicsToAvoid: [],
+    topicsToEmphasize: [],
+    contentGuards: "moderate",
+  },
+  growth: {
+    channelFocus: ["threads", "note"],
+    contentFrequency: "steady",
+    audienceStrategy: "existing",
+  },
+  monetization: {
+    priceStrategy: "standard",
+    conversionFocus: "nurture",
+    revenueTarget: "growth",
+  },
+};
+
 export interface StrategyStateSnapshot {
   objective: HeartbeatObjective;
   funnelStage: FunnelStage;
@@ -38,6 +82,22 @@ export interface StrategyStateSnapshot {
   latestNoteCount: number;
   insightFocus: string[];
   activeActionTypes: ActionType[];
+  policies: StrategyPolicies;
+}
+
+export interface ContentGuidance {
+  topicsToEmphasize: string[];
+  topicsToAvoid: string[];
+  recommendedTone: string;
+  replyPolicy: string;
+}
+
+export interface ErrorContext {
+  recentFailures: Array<{ jobName: string; error: string; at: string }>;
+  pendingReviewCount: number;
+  pendingProposalCount: number;
+  consecutiveFailures: number;
+  pendingProposalSummaries?: Array<{ id: string; actionType: string; reason: string }>;
 }
 
 export interface HeartbeatCyclePlan {
@@ -51,6 +111,9 @@ export interface HeartbeatCyclePlan {
   strategy: StrategyStateSnapshot;
   llmReasoning?: string;
   departmentInstructions?: Record<string, string>;
+  contentGuidance?: ContentGuidance;
+  policyUpdates?: Partial<StrategyPolicies>;
+  proposalDecisions?: Array<{ proposalId: string; decision: "approve" | "reject" | "escalate_to_human" }>;
 }
 
 export interface ExecutiveService {
@@ -58,6 +121,7 @@ export interface ExecutiveService {
     reports: DepartmentReport[],
     candidateActions: ScheduledAction[],
     llm: LlmClient,
+    errorContext?: ErrorContext,
   ): Promise<HeartbeatCyclePlan>;
   resolveDepartment(actionType: ActionType): DepartmentName;
   recordDepartmentRun(params: {
@@ -87,6 +151,9 @@ interface LlmExecutiveDecision {
   approvedActionTypes: unknown;
   reasoning: unknown;
   departmentInstructions: unknown;
+  contentGuidance?: unknown;
+  policyUpdates?: unknown;
+  proposalDecisions?: unknown;
 }
 
 function isHeartbeatObjective(v: unknown): v is HeartbeatObjective {
@@ -107,6 +174,23 @@ function isFunnelStage(v: unknown): v is FunnelStage {
 }
 
 export class ExecutiveServiceImpl implements ExecutiveService {
+  private loadCurrentPolicies(): StrategyPolicies {
+    const existing = db
+      .select()
+      .from(strategyStates)
+      .where(eq(strategyStates.key, STRATEGY_STATE_KEY))
+      .get();
+    if (existing) {
+      try {
+        const state = JSON.parse(existing.stateJson) as Partial<StrategyStateSnapshot>;
+        if (state.policies) return state.policies;
+      } catch {
+        // parse failure, use defaults
+      }
+    }
+    return { ...DEFAULT_POLICIES };
+  }
+
   private saveStrategyHistory(
     cycleId: string,
     objective: HeartbeatObjective,
@@ -134,12 +218,22 @@ export class ExecutiveServiceImpl implements ExecutiveService {
   private buildExecutivePrompt(
     reports: DepartmentReport[],
     candidateActions: ScheduledAction[],
+    errorContext?: ErrorContext,
   ): string {
     const reportSection = reports
-      .map(
-        (r) =>
-          `### ${r.department}部\n- 状況: ${r.summary}\n- 数値: ${JSON.stringify(r.metrics)}\n- 推奨: ${r.recommendation}\n- 最終実行: ${r.lastExecutedAt ?? "なし"}`,
-      )
+      .map((r) => {
+        const headline = (r.summary ?? "").slice(0, 100);
+        const metricsEntries = r.metrics && typeof r.metrics === "object"
+          ? Object.entries(r.metrics as Record<string, unknown>)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .slice(0, 3)
+          : [];
+        const keyMetrics = metricsEntries.length > 0
+          ? metricsEntries.map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`).join(", ")
+          : "なし";
+        const status = (r.recommendation ?? "").slice(0, 50);
+        return `### ${r.department}部\n- headline: ${headline}\n- keyMetrics: ${keyMetrics}\n- status: ${status}`;
+      })
       .join("\n\n");
 
     const actionSection = candidateActions
@@ -153,11 +247,11 @@ export class ExecutiveServiceImpl implements ExecutiveService {
       .select()
       .from(strategyHistory)
       .orderBy(desc(strategyHistory.createdAt))
-      .limit(5)
+      .limit(3)
       .all();
 
     const historySection = recentHistory.length > 0
-      ? `## 過去の戦略判断（直近${recentHistory.length}回）\n${recentHistory.map((h, i) => `${i + 1}. objective=${h.objective}, funnelStage=${h.funnelStage}, 理由: ${h.reasoning}`).join("\n")}\n\n中長期的な方向性の一貫性を考慮してください。頻繁な方針転換は避け、根拠がない限り前回の方針を継続してください。\n\n`
+      ? `## 過去の戦略判断（直近${recentHistory.length}回）\n${recentHistory.map((h, i) => `${i + 1}. objective=${h.objective}, funnelStage=${h.funnelStage}, 理由: ${(h.reasoning ?? "").slice(0, 400)}`).join("\n")}\n\n中長期的な方向性の一貫性を考慮してください。頻繁な方針転換は避け、根拠がない限り前回の方針を継続してください。\n\n`
       : "";
 
     return `あなたはThreadsOS運用の最高責任者（エグゼクティブ）です。
@@ -191,6 +285,11 @@ ${reportSection}
 
 ${actionSection}
 
+## 運用ポリシー（現在の方針を更新する場合のみ記載）
+brand: tone（professional/casual/bold/educational）、topicsToAvoid、topicsToEmphasize、contentGuards（strict/moderate/permissive）
+growth: channelFocus（threads/note配列）、contentFrequency（aggressive/steady/conservative）、audienceStrategy（existing/adjacent/new）
+monetization: priceStrategy（premium/standard/value）、conversionFocus（direct/nurture/educational）、revenueTarget（growth/maintain/experiment）
+
 ## 回答形式（JSONのみ）
 {
   "objective": "directive_assimilation" | "funnel_expansion" | "engagement_compounding",
@@ -199,8 +298,62 @@ ${actionSection}
   "reasoning": "判断理由を1-2文で",
   "departmentInstructions": {
     "department_name": "この部署への具体的指示"
+  },
+  "contentGuidance": {
+    "topicsToEmphasize": ["強調すべきテーマ"],
+    "topicsToAvoid": ["避けるべきテーマ"],
+    "recommendedTone": "推奨トーン",
+    "replyPolicy": "返信方針の指示"
+  },
+  "policyUpdates": {
+    "brand": { ... },
+    "growth": { ... },
+    "monetization": { ... }
+  },
+  "proposalDecisions": [
+    { "proposalId": "uuid", "decision": "approve" | "reject" | "escalate_to_human" }
+  ]
+}` +
+    (errorContext ? this.buildErrorSection(errorContext) : "");
   }
-}`;
+
+  private buildErrorSection(ctx: ErrorContext): string {
+    const failureCount = ctx.recentFailures.length;
+    const failureDetails = failureCount > 0
+      ? ctx.recentFailures
+          .slice(0, 3)
+          .map(f => `  - ${f.jobName}: ${(f.error ?? "").slice(0, 120)} (${f.at})`)
+          .join("\n") + (failureCount > 3 ? `\n  ...他 ${failureCount - 3} 件` : "")
+      : "  なし";
+
+    const proposalCount = ctx.pendingProposalSummaries?.length ?? 0;
+    const proposalDetails = proposalCount > 0
+      ? ctx.pendingProposalSummaries!
+          .slice(0, 3)
+          .map(p => `  - [${p.id}] ${p.actionType}: ${(p.reason ?? "").slice(0, 120)}`)
+          .join("\n") + (proposalCount > 3 ? `\n  ...他 ${proposalCount - 3} 件` : "")
+      : "  なし";
+
+    return `
+
+## 直近のエラー状況
+- 失敗ジョブ: ${failureCount}件 (代表${Math.min(failureCount, 3)}件)
+${failureDetails}
+- 未処理レビュー: ${ctx.pendingReviewCount}件
+- 未処理プロポーザル: ${ctx.pendingProposalCount}件 (代表${Math.min(proposalCount, 3)}件)
+${proposalDetails}
+- 連続失敗数: ${ctx.consecutiveFailures}
+
+エラーが存在する場合、以下の対処を検討せよ:
+- 回復可能なエラー（一時的なAPI障害等）→ 該当アクションを再スケジュール
+- pending レビューの自律判断 → 安全と判断できるものは自動承認
+- pending プロポーザルの自律承認 → Executiveとして承認可能なものは承認
+
+## プロポーザル判断
+上記の未処理プロポーザルがある場合、proposalDecisionsフィールドで各プロポーザルに対して判断を返してください:
+- "approve": 安全と判断し承認
+- "reject": リスクがあるため却下
+- "escalate_to_human": 人間の判断が必要`;
   }
 
   private collectPriorityTopics(): string[] {
@@ -316,6 +469,7 @@ ${actionSection}
         latestNoteCount: 0,
         insightFocus: [],
         activeActionTypes: limited.map((a) => a.type),
+        policies: this.loadCurrentPolicies(),
       },
       llmReasoning: fallbackReason,
       departmentInstructions: {},
@@ -326,10 +480,12 @@ ${actionSection}
     reports: DepartmentReport[],
     candidateActions: ScheduledAction[],
     llm: LlmClient,
+    errorContext?: ErrorContext,
   ): Promise<HeartbeatCyclePlan> {
-    const prompt = this.buildExecutivePrompt(reports, candidateActions);
+    const prompt = this.buildExecutivePrompt(reports, candidateActions, errorContext);
 
     const raw = await llm.generate(prompt, {
+      label: "executive-heartbeat-cycle",
       temperature: 0.3,
       systemPrompt:
         "You are an executive decision maker for an autonomous social media system. Return ONLY valid JSON.",
@@ -425,6 +581,37 @@ ${actionSection}
       ? decision.funnelStage
       : "bootstrap";
 
+    // ── ポリシー更新の処理 ──
+    const existingPolicies = this.loadCurrentPolicies();
+    const rawPolicyUpdates =
+      decision.policyUpdates &&
+      typeof decision.policyUpdates === "object" &&
+      !Array.isArray(decision.policyUpdates)
+        ? (decision.policyUpdates as Partial<StrategyPolicies>)
+        : undefined;
+    const mergedPolicies: StrategyPolicies = {
+      brand: { ...existingPolicies.brand, ...(rawPolicyUpdates?.brand ?? {}) },
+      growth: { ...existingPolicies.growth, ...(rawPolicyUpdates?.growth ?? {}) },
+      monetization: {
+        ...existingPolicies.monetization,
+        ...(rawPolicyUpdates?.monetization ?? {}),
+      },
+    };
+
+    // ── プロポーザル判断の処理 ──
+    const rawProposalDecisions = Array.isArray(decision.proposalDecisions)
+      ? (decision.proposalDecisions as Array<{ proposalId: string; decision: "approve" | "reject" | "escalate_to_human" }>)
+        .filter(d => d && typeof d.proposalId === "string" && typeof d.decision === "string")
+      : [];
+
+    // ── コンテンツガイダンスの処理 ──
+    const rawContentGuidance =
+      decision.contentGuidance &&
+      typeof decision.contentGuidance === "object" &&
+      !Array.isArray(decision.contentGuidance)
+        ? (decision.contentGuidance as ContentGuidance)
+        : undefined;
+
     const strategy: StrategyStateSnapshot = {
       objective,
       funnelStage,
@@ -444,6 +631,7 @@ ${actionSection}
         0,
       insightFocus: this.collectInsightFocus(),
       activeActionTypes: unique(approvedActions.map((a) => a.type)),
+      policies: mergedPolicies,
     };
 
     db.insert(strategyStates)
@@ -509,6 +697,9 @@ ${actionSection}
       strategy,
       llmReasoning: rawReasoning,
       departmentInstructions: rawInstructions,
+      contentGuidance: rawContentGuidance,
+      policyUpdates: rawPolicyUpdates,
+      proposalDecisions: rawProposalDecisions.length > 0 ? rawProposalDecisions : undefined,
     };
   }
 

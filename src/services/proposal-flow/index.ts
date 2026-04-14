@@ -28,6 +28,7 @@ export interface ProposalFlowService {
   createHierarchicalProposal(input: CreateProposalInput): string;
   approveProposal(id: string, actorId: string, note?: string): void;
   rejectProposal(id: string, actorId: string, note?: string): void;
+  escalateToHuman(id: string, actorId: string, note?: string): void;
   getHistory(proposalId: string): Array<{
     id: string;
     stage: string;
@@ -81,8 +82,8 @@ export function createProposalFlowService(): ProposalFlowService {
         risk: input.risk ?? null,
         priority: input.priority ?? "medium",
         status: "pending",
-        currentStage: "human_review",
-        currentApproverId: "dashboard-human",
+        currentStage: "executive_review",
+        currentApproverId: "executive-director",
         reviewerNote: null,
         reviewedAt: null,
         executedAt: null,
@@ -109,22 +110,12 @@ export function createProposalFlowService(): ProposalFlowService {
       });
     }
 
-    if (input.executiveAgentId) {
-      logEvent({
-        proposalId,
-        stage: "executive_review",
-        action: "approved",
-        actorId: input.executiveAgentId,
-        note: "管理・指揮系統が人間レビューへ送付",
-      });
-    }
-
     logEvent({
       proposalId,
-      stage: "human_review",
+      stage: "executive_review",
       action: "queued",
-      actorId: "dashboard-human",
-      note: "人間ダッシュボードでの承認待ち",
+      actorId: "executive-director",
+      note: "エグゼクティブの自律判断待ち",
     });
 
     return proposalId;
@@ -145,10 +136,10 @@ export function createProposalFlowService(): ProposalFlowService {
 
     logEvent({
       proposalId: id,
-      stage: "human_review",
+      stage: actorId === "executive-director" ? "executive_review" : "human_review",
       action: "approved",
       actorId,
-      note: note ?? "人間が提案を承認",
+      note: note ?? (actorId === "executive-director" ? "Executiveが提案を承認" : "人間が提案を承認"),
     });
   }
 
@@ -167,10 +158,37 @@ export function createProposalFlowService(): ProposalFlowService {
 
     logEvent({
       proposalId: id,
-      stage: "human_review",
+      stage: actorId === "executive-director" ? "executive_review" : "human_review",
       action: "rejected",
       actorId,
-      note: note ?? "人間が提案を差し戻し",
+      note: note ?? (actorId === "executive-director" ? "Executiveが提案を差し戻し" : "人間が提案を差し戻し"),
+    });
+  }
+
+  function escalateToHuman(id: string, actorId: string, note?: string): void {
+    const now = new Date().toISOString();
+    db.update(proposals)
+      .set({
+        currentStage: "human_review",
+        currentApproverId: "dashboard-human",
+      })
+      .where(eq(proposals.id, id))
+      .run();
+
+    logEvent({
+      proposalId: id,
+      stage: "executive_review",
+      action: "escalated",
+      actorId,
+      note: note ?? "エグゼクティブが人間レビューへエスカレーション",
+    });
+
+    logEvent({
+      proposalId: id,
+      stage: "human_review",
+      action: "queued",
+      actorId: "dashboard-human",
+      note: "人間ダッシュボードでの承認待ち",
     });
   }
 
@@ -187,6 +205,7 @@ export function createProposalFlowService(): ProposalFlowService {
     createHierarchicalProposal,
     approveProposal,
     rejectProposal,
+    escalateToHuman,
     getHistory,
   };
 }

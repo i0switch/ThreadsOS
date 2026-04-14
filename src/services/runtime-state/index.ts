@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { agentStates } from "../../db/schema.js";
+import { agentStates, proposals } from "../../db/schema.js";
 import type { ActionType } from "../content-scheduler/index.js";
 
 export type AgentStatus =
@@ -21,14 +21,14 @@ export type AgentDefinition = {
 export const AGENTS: AgentDefinition[] = [
   {
     id: "executive-director",
-    name: "Executive Director",
+    name: "総合指揮官",
     department: "command",
     role: "executive",
     actions: ["process_human_inputs", "notify"],
   },
   {
     id: "trend-researcher",
-    name: "Trend Researcher",
+    name: "トレンド調査員",
     department: "external-research",
     role: "researcher",
     actions: ["research_threads"],
@@ -36,30 +36,30 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "research-director",
-    name: "Research Director",
+    name: "リサーチ部長",
     department: "external-research",
     role: "leader",
     actions: ["research_threads"],
   },
   {
     id: "threads-competitor-researcher",
-    name: "Threads Competitor Researcher",
-    department: "threads",
+    name: "Threads競合調査員",
+    department: "competitive-analysis",
     role: "competitor_research",
-    actions: ["research_threads"],
-    leaderId: "threads-operations-director",
+    actions: ["research_threads", "fetch_competitor_updates"],
+    leaderId: "competitive-analysis-director",
   },
   {
     id: "note-competitor-researcher",
-    name: "note Competitor Researcher",
-    department: "note",
+    name: "note競合調査員",
+    department: "competitive-analysis",
     role: "competitor_research",
-    actions: ["research_note"],
-    leaderId: "note-operations-director",
+    actions: ["research_note", "fetch_competitor_updates"],
+    leaderId: "competitive-analysis-director",
   },
   {
     id: "threads-post-generator",
-    name: "Threads Post Generator",
+    name: "Threads投稿生成員",
     department: "threads",
     role: "generator",
     actions: ["generate_and_post"],
@@ -67,7 +67,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "threads-operations-director",
-    name: "Threads Operations Director",
+    name: "Threads運用部長",
     department: "threads",
     role: "leader",
     actions: [
@@ -81,7 +81,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "threads-engagement-analyst",
-    name: "Threads Engagement Analyst",
+    name: "Threadsエンゲージメント調査員",
     department: "threads",
     role: "analyst",
     actions: ["fetch_engagement"],
@@ -89,7 +89,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "threads-reply-generator",
-    name: "Threads Reply Generator",
+    name: "Threads返信生成員",
     department: "threads",
     role: "reply_generator",
     actions: ["reply_safe"],
@@ -97,7 +97,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "note-article-generator",
-    name: "note Article Generator",
+    name: "note記事生成員",
     department: "note",
     role: "generator",
     actions: ["generate_note"],
@@ -105,7 +105,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "note-engagement-analyst",
-    name: "note Engagement Analyst",
+    name: "noteエンゲージメント調査員",
     department: "note",
     role: "analyst",
     actions: ["generate_note", "optimize_schedule"],
@@ -113,49 +113,25 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     id: "note-operations-director",
-    name: "note Operations Director",
+    name: "note運用部長",
     department: "note",
     role: "leader",
     actions: ["research_note", "generate_note", "optimize_schedule"],
   },
   {
     id: "engagement-analyst",
-    name: "Competitive Signal Analyst",
+    name: "エンゲージメント分析官",
     department: "competitive-analysis",
     role: "analyst",
     actions: ["analyze_competitors"],
-    leaderId: "community-director",
+    leaderId: "competitive-analysis-director",
   },
   {
-    id: "reply-manager",
-    name: "Reply Manager",
-    department: "threads",
-    role: "reply_manager",
-    actions: [],
-    leaderId: "threads-operations-director",
-  },
-  {
-    id: "community-director",
-    name: "Competitive Analysis Director",
+    id: "competitive-analysis-director",
+    name: "競合分析部長",
     department: "competitive-analysis",
     role: "leader",
-    actions: ["analyze_competitors"],
-  },
-  {
-    id: "cadence-optimizer",
-    name: "Cadence Optimizer",
-    department: "threads",
-    role: "optimizer",
-    actions: ["optimize_schedule", "weekly_retro"],
-    leaderId: "threads-operations-director",
-  },
-  {
-    id: "optimization-director",
-    name: "Command Operations Director",
-    department: "command",
-    role: "leader",
-    actions: ["notify"],
-    leaderId: "executive-director",
+    actions: ["analyze_competitors", "fetch_competitor_updates"],
   },
 ];
 
@@ -173,13 +149,15 @@ function resolveAgents(actionType: ActionType): AgentPair {
   const preferredWorkers: Partial<Record<ActionType, string>> = {
     research_threads: "trend-researcher",
     research_note: "note-competitor-researcher",
+    analyze_competitors: "engagement-analyst",
+    fetch_competitor_updates: "threads-competitor-researcher",
     generate_and_post: "threads-post-generator",
     generate_note: "note-article-generator",
     fetch_engagement: "threads-engagement-analyst",
     reply_safe: "threads-reply-generator",
-    weekly_retro: "cadence-optimizer",
-    optimize_schedule: "cadence-optimizer",
-    notify: "optimization-director",
+    weekly_retro: "threads-operations-director",
+    optimize_schedule: "threads-operations-director",
+    notify: "executive-director",
     process_human_inputs: "executive-director",
   };
 
@@ -216,6 +194,9 @@ function upsertAgentState(
   if (existing) {
     db.update(agentStates)
       .set({
+        name: agent.name,
+        department: agent.department,
+        role: agent.role,
         ...updates,
         updatedAt: now,
       })
@@ -309,6 +290,33 @@ export function createRuntimeStateService(): RuntimeStateService {
     for (const agent of AGENTS) {
       upsertAgentState(agent, {});
     }
+    // Clean up agents no longer in catalog
+    const validIds = AGENTS.map((a) => a.id);
+    db.delete(agentStates)
+      .where(
+        sql`${agentStates.id} NOT IN (${sql.join(
+          validIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`,
+      )
+      .run();
+
+    // Clean up orphaned proposals pointing to deleted approvers
+    // (Executive自律承認が有効なため、executive-director以外の承認待ちは全てorphan)
+    db.update(proposals)
+      .set({
+        status: "rejected",
+        currentStage: "rejected",
+        reviewerNote: "Auto-rejected: approver no longer exists (Executive自律承認に移行済み)",
+        reviewedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(proposals.status, "pending"),
+          sql`${proposals.currentApproverId} NOT IN ('executive-director', 'dashboard-human')`,
+        ),
+      )
+      .run();
   }
 
   function startAction(actionType: ActionType, task: string) {

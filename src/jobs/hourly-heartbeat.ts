@@ -1,6 +1,7 @@
 ﻿import { randomUUID } from "node:crypto";
-import { and, eq, isNull, lt, or } from "drizzle-orm";
+import { and, desc, eq, isNull, lt, or } from "drizzle-orm";
 import { createLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
+import { startHeartbeatSession } from "../app/heartbeat-context.js";
 import {
   DryRunNoteApiClient,
   NoteApiClientImpl,
@@ -15,13 +16,19 @@ import { loadEnv } from "../config/env.js";
 import { ensureAutonomyTables } from "../db/bootstrap.js";
 import { db } from "../db/index.js";
 import {
+  contentSlots,
   departmentNotifications,
   departmentRuns,
   departmentSummaries,
   heartbeatStates,
+  humanReviewItems,
+  noteDrafts,
+  proposals,
   scheduledJobRuns,
   systemControls,
 } from "../db/schema.js";
+import type { ActionType } from "../services/content-scheduler/index.js";
+import type { ErrorContext } from "../services/executive/index.js";
 import { AutoPublisherServiceImpl } from "../services/auto-publisher/index.js";
 import { createBudgetService } from "../services/budget/index.js";
 import { CadenceOptimizerServiceImpl } from "../services/cadence-optimizer/index.js";
@@ -39,6 +46,7 @@ import { createRetrievalService } from "../services/retrieval/index.js";
 import { createRuntimeStateService } from "../services/runtime-state/index.js";
 import { createSafetyService } from "../services/safety/index.js";
 import { refreshToken, updateEnvFile } from "./refresh-threads-token.js";
+import { parseJsonObject } from "../utils/llm-json.js";
 import { runJob } from "./runner.js";
 
 function readEnvInt(name: string, fallback: number): number {
@@ -193,6 +201,7 @@ async function runTrackedSubJob(
 await runJob(
   { name: "hourly-heartbeat", dryRun },
   async ({ dryRun, logger }) => {
+    startHeartbeatSession();
     db.insert(heartbeatStates)
       .values({
         jobName: "hourly-heartbeat",
@@ -446,12 +455,69 @@ await runJob(
         "Department reports collected (bottom-up)",
       );
 
+      // ── Step 3.7: エラー情報・プロポーザル収集（Executive自律判断用） ──
+      const recentFailures = db
+        .select()
+        .from(scheduledJobRuns)
+        .where(eq(scheduledJobRuns.status, "failed"))
+        .orderBy(desc(scheduledJobRuns.startedAt))
+        .limit(5)
+        .all()
+        .map(r => ({
+          jobName: r.jobName,
+          error: r.resultSummary ?? "unknown",
+          at: r.startedAt,
+        }));
+
+      const pendingReviewCount = db
+        .select()
+        .from(humanReviewItems)
+        .where(eq(humanReviewItems.status, "pending"))
+        .all().length;
+
+      const pendingProposals = db
+        .select()
+        .from(proposals)
+        .where(
+          and(
+            eq(proposals.status, "pending"),
+            eq(proposals.currentStage, "executive_review"),
+          ),
+        )
+        .all();
+
+      const errorContext: ErrorContext = {
+        recentFailures,
+        pendingReviewCount,
+        pendingProposalCount: pendingProposals.length,
+        consecutiveFailures: current?.consecutiveFailures ?? 0,
+        pendingProposalSummaries: pendingProposals.map(p => {
+          const meta = p.evidence ? (() => { try { return JSON.parse(p.evidence); } catch { return {}; } })() : {};
+          return {
+            id: p.id,
+            actionType: meta?.actionType ?? p.title,
+            reason: p.reason,
+          };
+        }),
+      };
+
+      logger.info(
+        {
+          recentFailures: recentFailures.length,
+          pendingReviewCount,
+          pendingProposalCount: pendingProposals.length,
+          consecutiveFailures: errorContext.consecutiveFailures,
+        },
+        "Error context collected for executive",
+      );
+
       // ── Step 4: エグゼクティブ判断（LLM駆動） ───────────────────
       const actions = await scheduler.decideActions();
       const cycle = await executive.beginHeartbeatCycle(
         departmentReports,
         actions,
         llm,
+        errorContext,
       );
       const results: string[] = [];
 
@@ -475,6 +541,125 @@ await runJob(
         },
         "Heartbeat cycle planned by executive (LLM-driven)",
       );
+
+      // ── Step 4.5: Executive自律プロポーザル判断の実行 ──────────
+      if (cycle.proposalDecisions && cycle.proposalDecisions.length > 0) {
+        for (const pd of cycle.proposalDecisions) {
+          try {
+            if (pd.decision === "approve") {
+              proposalFlow.approveProposal(pd.proposalId, "executive-director", "Executive自律承認");
+              logger.info({ proposalId: pd.proposalId }, "Executive auto-approved proposal");
+            } else if (pd.decision === "reject") {
+              proposalFlow.rejectProposal(pd.proposalId, "executive-director", "Executive自律却下");
+              logger.info({ proposalId: pd.proposalId }, "Executive auto-rejected proposal");
+            } else if (pd.decision === "escalate_to_human") {
+              proposalFlow.escalateToHuman(pd.proposalId, "executive-director", "Executive判断: 人間確認必要");
+              logger.info({ proposalId: pd.proposalId }, "Executive escalated proposal to human review");
+            }
+          } catch (pdErr) {
+            logger.warn(
+              { proposalId: pd.proposalId, error: pdErr instanceof Error ? pdErr.message : String(pdErr) },
+              "Failed to process proposal decision",
+            );
+          }
+        }
+      }
+
+      // ── Step 4.7: 承認済みプロポーザルをアクション実行キューに追加 ──
+      const approvedProposals = db
+        .select()
+        .from(proposals)
+        .where(
+          and(
+            eq(proposals.status, "approved"),
+          ),
+        )
+        .orderBy(desc(proposals.reviewedAt))
+        .limit(5)
+        .all()
+        .filter(p => {
+          if (!p.reviewedAt) return false;
+          // 直近24時間以内に承認されたもの
+          const reviewedTime = new Date(p.reviewedAt).getTime();
+          return Date.now() - reviewedTime < 24 * 60 * 60 * 1000 && !p.executedAt;
+        });
+
+      for (const ap of approvedProposals) {
+        try {
+          const meta = ap.evidence ? (() => { try { return JSON.parse(ap.evidence); } catch { return {}; } })() : {};
+          const actionType = meta?.actionType ?? null;
+          if (actionType) {
+            // Mark as executed so it won't be picked up again
+            db.update(proposals)
+              .set({ executedAt: new Date().toISOString() })
+              .where(eq(proposals.id, ap.id))
+              .run();
+            // Add to candidate actions for execution
+            cycle.approvedActions.push({
+              type: actionType as ActionType,
+              priority: meta?.priority ?? 5,
+              reason: `承認済みプロポーザル ${ap.id}: ${ap.reason}`,
+            });
+            logger.info({ proposalId: ap.id, actionType }, "Approved proposal added to execution queue");
+          }
+        } catch (apErr) {
+          logger.warn(
+            { proposalId: ap.id, error: apErr instanceof Error ? apErr.message : String(apErr) },
+            "Failed to queue approved proposal",
+          );
+        }
+      }
+
+      // ── Step 4.8: audited note draft があれば強制公開（Executiveの判断を待たない） ──
+      try {
+        const auditedNoteCount = db
+          .select()
+          .from(noteDrafts)
+          .where(eq(noteDrafts.status, "audited"))
+          .all().length;
+        const pendingNoteSlotCount = db
+          .select()
+          .from(contentSlots)
+          .where(
+            and(
+              eq(contentSlots.channel, "note"),
+              eq(contentSlots.status, "pending"),
+            ),
+          )
+          .all().length;
+        if (
+          auditedNoteCount > 0 &&
+          pendingNoteSlotCount > 0 &&
+          !cycle.approvedActions.some((a) => a.type === "generate_note")
+        ) {
+          // 未来時刻のpending slot を即時実行可能にする
+          const nowIso = new Date().toISOString();
+          db.update(contentSlots)
+            .set({ scheduledAt: nowIso, updatedAt: nowIso })
+            .where(
+              and(
+                eq(contentSlots.channel, "note"),
+                eq(contentSlots.status, "pending"),
+              ),
+            )
+            .run();
+
+          cycle.approvedActions.push({
+            type: "generate_note" as ActionType,
+            priority: 5,
+            reason: "audited下書きとpendingスロットがあるため強制公開実行",
+          });
+          logger.info(
+            { auditedNoteCount, pendingNoteSlotCount },
+            "Forced generate_note action to publish audited drafts",
+          );
+        }
+      } catch (forceErr) {
+        logger.warn(
+          { error: forceErr instanceof Error ? forceErr.message : String(forceErr) },
+          "Failed to check/force note publish",
+        );
+      }
 
       // ── Step 5-6: 各部署へ最小コンテキスト配布 & 部署実行 ───
       for (const action of cycle.approvedActions) {
@@ -600,6 +785,23 @@ await runJob(
               })
               .run();
           }
+          // コンテンツガイダンスを生成・返信系部署に通知
+          if (
+            cycle.contentGuidance &&
+            (department === "threads" || department === "note")
+          ) {
+            db.insert(departmentNotifications)
+              .values({
+                id: randomUUID(),
+                fromDepartment: "command",
+                toDepartment: department,
+                notificationType: "content_guidance",
+                content: JSON.stringify(cycle.contentGuidance),
+                readAt: null,
+                createdAt: new Date().toISOString(),
+              })
+              .run();
+          }
           const execution = await departmentExecution.execute(action, instruction);
           results.push(execution.summary);
 
@@ -703,6 +905,66 @@ await runJob(
         "Budget status at heartbeat completion",
       );
 
+      // ── Step 14: human_review_items 自動再評価 ─────────────────
+      const pendingReviews = db
+        .select()
+        .from(humanReviewItems)
+        .where(eq(humanReviewItems.status, "pending"))
+        .limit(5)
+        .all();
+
+      if (pendingReviews.length > 0 && !dryRun) {
+        logger.info({ count: pendingReviews.length }, "Auto-evaluating pending human review items");
+        for (const review of pendingReviews) {
+          try {
+            const reviewPrompt = `以下のコンテンツは安全ですか？自動承認して問題ないか判断してください。
+
+タイプ: ${review.itemType}
+理由: ${review.reason}
+
+以下のJSON形式で回答:
+{
+  "safe": true | false,
+  "reason": "判断理由"
+}
+
+判断基準:
+- 攻撃的・差別的内容 → safe: false
+- 医療・法律・投資の具体的アドバイス → safe: false
+- 一般的な質問への返信・好意的コメント → safe: true
+- 判断が難しい場合 → safe: false (人間に任せる)`;
+
+            const raw = await llm.generate(reviewPrompt, {
+              label: "heartbeat-human-review-auto-eval",
+              temperature: 0.2,
+              tier: "fast",
+            });
+            const result = parseJsonObject<{ safe: boolean; reason: string }>(raw);
+            if (result?.safe === true) {
+              db.update(humanReviewItems)
+                .set({
+                  status: "approved",
+                  reviewedAt: new Date().toISOString(),
+                  reviewerNote: `Executive自動承認: ${result.reason}`,
+                })
+                .where(eq(humanReviewItems.id, review.id))
+                .run();
+              logger.info({ reviewId: review.id }, "Auto-approved human review item");
+            } else {
+              logger.info(
+                { reviewId: review.id, reason: result?.reason ?? "parse failed" },
+                "Human review item kept pending",
+              );
+            }
+          } catch (reviewErr) {
+            logger.warn(
+              { reviewId: review.id, error: reviewErr instanceof Error ? reviewErr.message : String(reviewErr) },
+              "Failed to auto-evaluate human review item",
+            );
+          }
+        }
+      }
+
       // Expire stale working memory
       const expired = memoryService.expireWorking();
       if (expired > 0) {
@@ -769,3 +1031,4 @@ await runJob(
     }
   },
 );
+

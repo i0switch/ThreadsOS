@@ -35,6 +35,27 @@ module.exports = {
       retain: 7,
     },
     {
+      name: "heartbeat-loop",
+      script: "node_modules/tsx/dist/cli.mjs",
+      args: "src/jobs/heartbeat-loop.ts",
+      cwd: __dirname,
+      interpreter: "node",
+      // 常駐ループ: 内部タイマーで1時間間隔のハートビートを自律実行
+      autorestart: true,
+      watch: false,
+      env: {
+        NODE_ENV: "production",
+        TZ: "Asia/Tokyo",
+        HEARTBEAT_LOOP_INTERVAL_MS: "3600000",
+      },
+      out_file: "logs/heartbeat-loop-out.log",
+      error_file: "logs/heartbeat-loop-error.log",
+      log_date_format: "YYYY-MM-DD HH:mm:ss",
+      merge_logs: true,
+      max_size: "10M",
+      retain: 7,
+    },
+    {
       name: "llm-worker",
       script: "node_modules/tsx/dist/cli.mjs",
       args: "src/jobs/llm-heartbeat-worker.ts",

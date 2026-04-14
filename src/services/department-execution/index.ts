@@ -210,10 +210,13 @@ export class DepartmentExecutionServiceImpl {
           .where(eq(humanInputs.processed, 0))
           .all();
         const currentState = this.getLatestDepartmentSummary("command");
+        const commandNotifications = this.getUnreadNotifications("command");
         const liveSummary =
           pending.length > 0
-            ? `未処理の人間入力が${pending.length}件あり。優先処理推奨`
-            : "未処理の人間入力なし。待機中";
+            ? `未処理の人間入力が${pending.length}件あり。優先処理推奨${commandNotifications}`
+            : commandNotifications
+              ? `未処理の人間入力なし。待機中${commandNotifications}`
+              : "未処理の人間入力なし。待機中";
         return {
           department: "command",
           summary: currentState
@@ -223,6 +226,8 @@ export class DepartmentExecutionServiceImpl {
           recommendation:
             pending.length > 0
               ? "process_human_inputs を実行すべき"
+              : commandNotifications
+                ? "他部署通知を踏まえて全体判断を更新すべき"
               : "動く必要なし",
           lastExecutedAt: this.getLastRun("command"),
         };
@@ -322,7 +327,8 @@ export class DepartmentExecutionServiceImpl {
     const research = new ResearchServiceImpl();
     return {
       department: "competitive-analysis",
-      supports: (actionType) => actionType === "analyze_competitors",
+      supports: (actionType) =>
+        ["analyze_competitors", "fetch_competitor_updates"].includes(actionType),
       report: (): DepartmentReport => {
         const snapshots = db
           .select()
@@ -385,6 +391,60 @@ export class DepartmentExecutionServiceImpl {
             "Executive instruction received",
           );
         }
+
+        // 軽量版: 競合スナップショット差分更新
+        if (action.type === "fetch_competitor_updates") {
+          const summary = await this.runAgentSubtask(
+            "threads-competitor-researcher",
+            "競合スナップショット差分更新（軽量版）",
+            async () => {
+              const latestSnapshot = db
+                .select()
+                .from(competitorSnapshots)
+                .orderBy(desc(competitorSnapshots.createdAt))
+                .limit(1)
+                .get();
+
+              const now = new Date().toISOString();
+              const snapshotAge = latestSnapshot
+                ? Math.floor(
+                    (Date.now() -
+                      new Date(latestSnapshot.createdAt).getTime()) /
+                      3_600_000,
+                  )
+                : 999;
+
+              // Notify threads, note, and command departments about the update check
+              for (const toDept of [
+                "threads",
+                "note",
+                "command",
+              ] as DepartmentName[]) {
+                db.insert(departmentNotifications)
+                  .values({
+                    id: randomUUID(),
+                    fromDepartment: "competitive-analysis",
+                    toDepartment: toDept,
+                    notificationType: "competitor_update",
+                    content: JSON.stringify({
+                      type: "snapshot_check",
+                      snapshotAgeHours: snapshotAge,
+                      hasExistingData: !!latestSnapshot,
+                      checkedAt: now,
+                    }),
+                    readAt: null,
+                    createdAt: now,
+                  })
+                  .run();
+              }
+
+              return `競合スナップショット差分チェック完了: 最新スナップショット${snapshotAge}時間前、各部署へ通知済み`;
+            },
+          );
+          return createResult(action, summary, undefined, "competitive-analysis");
+        }
+
+        // フル分析: analyze_competitors
         const summary = await this.runAgentSubtask(
           "engagement-analyst",
           "競合投稿の分析と勝ちパターン抽出",
@@ -398,7 +458,7 @@ export class DepartmentExecutionServiceImpl {
               "note",
             );
 
-            // Push notifications to threads and note departments
+            // Push notifications to threads, note, and command departments
             const now = new Date().toISOString();
             if (threadsResult.winningPatterns.length > 0) {
               db.insert(departmentNotifications)
@@ -432,6 +492,39 @@ export class DepartmentExecutionServiceImpl {
                 })
                 .run();
             }
+            if (
+              threadsResult.analysisCount > 0 ||
+              noteResult.analysisCount > 0
+            ) {
+              db.insert(departmentNotifications)
+                .values({
+                  id: randomUUID(),
+                  fromDepartment: "competitive-analysis",
+                  toDepartment: "command",
+                  notificationType: "analysis_complete",
+                  content: JSON.stringify({
+                    threads: {
+                      analysisCount: threadsResult.analysisCount,
+                      winningPatterns: threadsResult.winningPatterns,
+                      summary: threadsResult.summary,
+                    },
+                    note: {
+                      analysisCount: noteResult.analysisCount,
+                      winningPatterns: noteResult.winningPatterns,
+                      summary: noteResult.summary,
+                    },
+                    combinedWinningPatterns: [
+                      ...new Set([
+                        ...threadsResult.winningPatterns,
+                        ...noteResult.winningPatterns,
+                      ]),
+                    ],
+                  }),
+                  readAt: null,
+                  createdAt: now,
+                })
+                .run();
+            }
 
             return `競合分析完了: Threads ${threadsResult.analysisCount}件, note ${noteResult.analysisCount}件分析。勝ちパターン: ${[...threadsResult.winningPatterns, ...noteResult.winningPatterns].join(", ") || "なし"}`;
           },
@@ -452,6 +545,7 @@ export class DepartmentExecutionServiceImpl {
             "reply_safe",
             "optimize_schedule",
             "weekly_retro",
+            "research_threads",
           ],
           actionType,
         ),
@@ -572,6 +666,22 @@ export class DepartmentExecutionServiceImpl {
             () =>
               this.deps.runTrackedSubJob("weekly-retro", () =>
                 this.deps.orchestration.runWeeklyRetro(
+                  this.deps.llm,
+                  this.deps.storage,
+                  this.deps.dryRun,
+                ),
+              ),
+          );
+          return createResult(action, summary);
+        }
+
+        if (action.type === "research_threads") {
+          const summary = await this.runAgentSubtask(
+            "threads-competitor-researcher",
+            "Threads競合アカウントと投稿の調査・分析",
+            () =>
+              this.deps.runTrackedSubJob("threads-competitor-research", () =>
+                this.deps.orchestration.runThreadsResearch(
                   this.deps.llm,
                   this.deps.storage,
                   this.deps.dryRun,

@@ -9,6 +9,7 @@ import {
   noteDrafts,
   noteIdeas,
   notePostResults,
+  outboundNotifications,
   replyDecisions,
   threadPostDrafts,
   threadPostResults,
@@ -306,7 +307,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
         Boolean(
           slot.draftId &&
             draft?.status === "audited" &&
-            (draft.publishReadinessScore ?? 0) >= 7,
+            (draft.publishReadinessScore ?? 0) >= 5,
         ),
       );
   }
@@ -579,7 +580,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
       if (
         !draft ||
         draft.status !== "audited" ||
-        (draft.publishReadinessScore ?? 0) < 7
+        (draft.publishReadinessScore ?? 0) < 5
       ) {
         logger.warn(
           { slotId: slot.id, draftId: slot.draftId },
@@ -705,11 +706,53 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           "Auto-published note draft",
         );
       } catch (error) {
-        await this.unreserveSlot(slot.id);
+        const errorMsg =
+          error instanceof Error ? error.message : String(error);
+        const isSessionExpired =
+          /NOTE_SESSION_EXPIRED|セッション|ログイン|storageState/i.test(
+            errorMsg,
+          );
+
+        // Fix-1a (2026-04-14): エラー記録を強化
+        // 1. outbound_notifications に記録してユーザー可視化
+        // 2. 認証切れなら slot を failed にして無限リトライ回避
+        // 3. 一時エラー (rate limit等) は unreserve のまま再挑戦させる
         logger.error(
-          { draftId: draft.id, slotId: slot.id, error },
+          {
+            draftId: draft.id,
+            slotId: slot.id,
+            error: errorMsg,
+            sessionExpired: isSessionExpired,
+          },
           "Failed to auto-publish note draft",
         );
+
+        try {
+          db.insert(outboundNotifications)
+            .values({
+              id: randomUUID(),
+              type: isSessionExpired
+                ? "note_session_expired"
+                : "note_publish_failed",
+              channel: "ops",
+              content: isSessionExpired
+                ? `note.comセッション切れ。'npm run note:login'を手動実行して再ログインしてください。draftId=${draft.id}`
+                : `note自動公開失敗: ${errorMsg.slice(0, 200)} (draftId=${draft.id})`,
+              sentAt: new Date().toISOString(),
+            })
+            .run();
+        } catch (notifyErr) {
+          logger.warn(
+            { notifyErr },
+            "Failed to record note publish failure notification",
+          );
+        }
+
+        if (isSessionExpired) {
+          await this.skipSlot(slot.id);
+        } else {
+          await this.unreserveSlot(slot.id);
+        }
       }
     }
 

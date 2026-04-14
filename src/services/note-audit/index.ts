@@ -72,6 +72,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 }`;
 
     const raw = await llm.generate(prompt, {
+      label: "note-draft-audit",
       temperature: 0.3,
       tier: "premium",
     });
@@ -90,10 +91,11 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       rewriteGuidance: string;
       score: number;
     }>(raw) ?? {
-      verdict: "human_review",
+      // Fix-2 (2026-04-14): パース失敗は revise で自動リトライに (human_reviewに降らない)
+      verdict: "revise",
       strongestSection: "",
       weakestSection: "",
-      rewriteGuidance: "",
+      rewriteGuidance: "LLM応答パース失敗。JSON形式で再生成",
       score: 5,
     };
 
@@ -102,11 +104,12 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       !parsed.weakestSection &&
       !parsed.rewriteGuidance
     ) {
+      // Fix-2 (2026-04-14): 空応答も revise 扱いで再生成ループに回す
       parsed = {
-        verdict: "human_review",
+        verdict: "revise",
         strongestSection: "",
         weakestSection: "",
-        rewriteGuidance: "",
+        rewriteGuidance: "監査結果が空。具体的な指摘を出して再生成",
         score: 5,
       };
     }
@@ -167,7 +170,9 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
             ? "audited"
             : parsed.verdict === "reject"
               ? "rejected"
-              : "draft",
+              : normalizedScore >= 6
+                ? "audited"
+                : "draft",
         publishReadinessScore: normalizedScore,
         updatedAt: now,
       })

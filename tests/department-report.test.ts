@@ -1,5 +1,6 @@
 ﻿import { sql } from "drizzle-orm";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { departmentNotifications } from "../src/db/schema.js";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
@@ -7,9 +8,12 @@ process.env.DATABASE_URL = ":memory:";
 type Db = typeof import("../src/db/index.js")["db"];
 type DepartmentExecutionServiceImplCtor =
   typeof import("../src/services/department-execution/index.js")["DepartmentExecutionServiceImpl"];
+type ResearchServiceImplCtor =
+  typeof import("../src/services/research/index.js")["ResearchServiceImpl"];
 
 let db: Db;
 let DepartmentExecutionServiceImpl: DepartmentExecutionServiceImplCtor;
+let ResearchServiceImpl: ResearchServiceImplCtor;
 
 function makeMinimalDeps() {
   return {
@@ -37,6 +41,7 @@ beforeAll(async () => {
   ({ DepartmentExecutionServiceImpl } = await import(
     "../src/services/department-execution/index.js"
   ));
+  ({ ResearchServiceImpl } = await import("../src/services/research/index.js"));
   ensureAutonomyTables();
 });
 
@@ -50,7 +55,10 @@ beforeEach(() => {
   db.run(sql`DELETE FROM note_post_results`);
   db.run(sql`DELETE FROM reply_decisions`);
   db.run(sql`DELETE FROM thread_post_results`);
+  db.run(sql`DELETE FROM department_notifications`);
   db.run(sql`DELETE FROM department_summaries`);
+  db.run(sql`DELETE FROM research_items`);
+  db.run(sql`DELETE FROM memory_entries`);
 });
 
 describe("DepartmentExecution collectReports()", () => {
@@ -153,5 +161,57 @@ describe("DepartmentExecution collectReports()", () => {
 
     expect(commandReport).toBeDefined();
     expect(commandReport!.summary).not.toContain("前回の状態");
+  });
+
+  it("command report surfaces unread notifications from other departments", async () => {
+    const researchService = new ResearchServiceImpl({
+      search: async () => [],
+    } as never);
+    const llm = {
+      generate: async () =>
+        JSON.stringify([
+          {
+            source: "community",
+            content: "AI副業では具体的な事例付きの投稿が伸びている",
+            evidenceType: "trend",
+            confidence: "high",
+          },
+        ]),
+    } as never;
+
+    await researchService.researchTopic("topic-1", "AI副業", llm);
+
+    const now = new Date().toISOString();
+    db.run(
+      sql`INSERT INTO department_notifications (id, from_department, to_department, notification_type, content, read_at, created_at)
+          VALUES ('notif-ca-1', 'competitive-analysis', 'command', 'analysis_complete', ${JSON.stringify({ winningPatterns: ["具体数字+逆張り"] })}, NULL, ${now})`,
+    );
+
+    const service = new DepartmentExecutionServiceImpl(makeMinimalDeps());
+    const reports = service.collectReports();
+    const commandReport = reports.find((r) => r.department === "command");
+
+    expect(commandReport).toBeDefined();
+    expect(commandReport!.summary).toContain("他部署からの通知2件");
+    expect(commandReport!.summary).toContain(
+      "[external-research→research_update]",
+    );
+    expect(commandReport!.summary).toContain(
+      "[competitive-analysis→analysis_complete]",
+    );
+    expect(commandReport!.recommendation).toBe(
+      "他部署通知を踏まえて全体判断を更新すべき",
+    );
+
+    const commandNotifications = db
+      .select()
+      .from(departmentNotifications)
+      .all()
+      .filter((row) => row.toDepartment === "command");
+
+    expect(commandNotifications).toHaveLength(2);
+    expect(
+      commandNotifications.every((row) => row.readAt !== null),
+    ).toBe(true);
   });
 });

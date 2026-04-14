@@ -3,6 +3,8 @@ import { ExternalApiError } from "../../app/errors.js";
 import { logger } from "../../app/logger.js";
 import { loadEnv } from "../../config/env.js";
 import { parseJsonObject } from "../../utils/llm-json.js";
+import { logTokenUsage } from "./token-logger.js";
+import { getCurrentHeartbeatId } from "../../app/heartbeat-context.js";
 
 export type LlmTier = "fast" | "standard" | "premium";
 
@@ -11,6 +13,7 @@ export interface LlmGenerateOptions {
   temperature?: number;
   systemPrompt?: string;
   tier?: LlmTier;
+  label?: string;
 }
 
 export interface LlmClient {
@@ -18,6 +21,7 @@ export interface LlmClient {
   audit(
     content: string,
     criteria: string[],
+    options?: LlmGenerateOptions,
   ): Promise<{
     verdict: "pass" | "revise" | "reject" | "human_review";
     severity: "low" | "medium" | "high";
@@ -29,6 +33,11 @@ export interface LlmClient {
 
 function resolveLlmTier(requestedTier?: LlmTier): LlmTier {
   return requestedTier ?? loadEnv().LLM_DEFAULT_TIER;
+}
+
+// Get heartbeatId from hourly-heartbeat module
+function getHeartbeatId(): string | null {
+  return getCurrentHeartbeatId();
 }
 
 function resolveDirectModelForTier(tier: LlmTier): string {
@@ -62,6 +71,7 @@ export class ClaudeLlmClient implements LlmClient {
       temperature = 0.7,
       systemPrompt,
       tier,
+      label,
     } = options ?? {};
     const resolvedTier = resolveLlmTier(tier);
 
@@ -80,6 +90,7 @@ export class ClaudeLlmClient implements LlmClient {
       body.system = systemPrompt;
     }
 
+    const startTime = Date.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -117,13 +128,36 @@ export class ClaudeLlmClient implements LlmClient {
 
     const result = (await response.json()) as {
       content: Array<{ type: string; text: string }>;
+      usage?: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+      };
     };
+    // Log token usage
+    const durationMs = Date.now() - startTime;
+    if (result.usage) {
+      logTokenUsage({
+        timestamp: new Date().toISOString(),
+        heartbeatId: getHeartbeatId(),
+        callSite: label ?? "unknown",
+        tier: resolvedTier,
+        inputTokens: result.usage.input_tokens ?? 0,
+        outputTokens: result.usage.output_tokens ?? 0,
+        cacheCreationTokens: result.usage.cache_creation_input_tokens,
+        cacheReadTokens: result.usage.cache_read_input_tokens,
+        durationMs,
+      });
+    }
+
     return result.content?.[0]?.text ?? "";
   }
 
   async audit(
     content: string,
     criteria: string[],
+    options?: LlmGenerateOptions,
   ): Promise<{
     verdict: "pass" | "revise" | "reject" | "human_review";
     severity: "low" | "medium" | "high";
@@ -131,6 +165,8 @@ export class ClaudeLlmClient implements LlmClient {
     suggestions: string[];
     score: number;
   }> {
+    // P1-C ロールバック (2026-04-14): 順序変更で cost +11%, cache hit率向上はゼロ、
+    // judgment厳しく revise +33% 副作用。実測で cache は元から最大化済みと判明
     const prompt = `以下のコンテンツを監査してください。
 
 ## コンテンツ
@@ -149,6 +185,7 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 }`;
 
     const raw = await this.generate(prompt, {
+      label: options?.label ?? "audit",
       temperature: 0.3,
       systemPrompt: "You are a content auditor. Return ONLY valid JSON.",
       tier: "premium",
@@ -164,10 +201,13 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 
     if (!parsed) {
       logger.warn({ raw }, "Failed to parse audit response as JSON");
+      // Fix-2 (2026-04-14): パース失敗は自動 revise でリトライに回す (human_reviewに降らない)。
+      // ExternalApiError等の本当のAPI障害は throw で上位伝播するので、ここに来るのはJSON破損のみ。
+      // リビジョン上限 (MAX_*_REVISION_ATTEMPTS=2) を超えた場合は settle 側で最終判断される。
       return {
-        verdict: "human_review",
-        severity: "medium",
-        reasons: ["LLM応答のパース失敗"],
+        verdict: "revise",
+        severity: "low",
+        reasons: ["LLM応答のパース失敗 (自動再生成)"],
         suggestions: ["JSON形式を維持して再生成する"],
         score: 5,
       };
@@ -237,10 +277,11 @@ function callClaudeCli(
   options?: LlmGenerateOptions,
 ): string {
   const mergedSystemPrompt = buildSystemPrompt(systemPrompt, options);
+  const resolvedTier = resolveLlmTier(options?.tier);
   const args = [
     "--print",
     "--output-format",
-    "text",
+    "json",
     "--model",
     resolveHeartbeatModel(options?.tier),
   ];
@@ -253,6 +294,7 @@ function callClaudeCli(
     "[HEARTBEAT] Calling Claude CLI",
   );
 
+  const startTime = Date.now();
   const result = spawnSync("claude", args, {
     input: prompt,
     encoding: "utf-8",
@@ -267,24 +309,90 @@ function callClaudeCli(
 
   const stdout = (result.stdout ?? "").trim();
 
-  if (
-    stdout.includes("out of extra usage") ||
-    stdout.includes("out of usage")
-  ) {
-    throw new Error(`Claude 使用量制限: ${stdout.slice(0, 100)}`);
-  }
-
   if (result.status !== 0 && !stdout) {
     const stderr = result.stderr?.trim() ?? "";
     throw new Error(`Claude CLI エラー (${result.status}): ${stderr}`);
   }
 
+  // Parse JSON output (stream-json array) and extract result + usage
+  let responseText = "";
+  try {
+    const parsed = JSON.parse(stdout);
+    const entries: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+    const resultEntry = entries.find(
+      (e): e is Record<string, unknown> =>
+        typeof e === "object" && e !== null && (e as { type?: string }).type === "result",
+    );
+
+    if (resultEntry) {
+      if (resultEntry.is_error) {
+        throw new Error(
+          `Claude CLI 結果エラー: ${String(resultEntry.result ?? "unknown")}`,
+        );
+      }
+      responseText =
+        typeof resultEntry.result === "string" ? resultEntry.result : "";
+
+      const usage = resultEntry.usage as
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_creation_input_tokens?: number;
+            cache_read_input_tokens?: number;
+          }
+        | undefined;
+      if (usage) {
+        const durationMs = Date.now() - startTime;
+        logTokenUsage({
+          timestamp: new Date().toISOString(),
+          heartbeatId: getHeartbeatId(),
+          callSite: options?.label ?? "unknown",
+          tier: resolvedTier,
+          inputTokens: usage.input_tokens ?? 0,
+          outputTokens: usage.output_tokens ?? 0,
+          cacheCreationTokens: usage.cache_creation_input_tokens,
+          cacheReadTokens: usage.cache_read_input_tokens,
+          costUsd:
+            typeof resultEntry.total_cost_usd === "number"
+              ? resultEntry.total_cost_usd
+              : undefined,
+          durationMs:
+            typeof resultEntry.duration_ms === "number"
+              ? resultEntry.duration_ms
+              : durationMs,
+        });
+      }
+    } else {
+      logger.warn(
+        { stdoutPreview: stdout.slice(0, 200) },
+        "[HEARTBEAT] No result entry in CLI JSON output, using raw stdout",
+      );
+      responseText = stdout;
+    }
+  } catch (err) {
+    logger.warn(
+      {
+        err: err instanceof Error ? err.message : String(err),
+        stdoutPreview: stdout.slice(0, 200),
+      },
+      "[HEARTBEAT] Failed to parse CLI JSON output, falling back to raw stdout",
+    );
+    responseText = stdout;
+  }
+
+  if (
+    responseText.includes("out of extra usage") ||
+    responseText.includes("out of usage")
+  ) {
+    throw new Error(`Claude 使用量制限: ${responseText.slice(0, 100)}`);
+  }
+
   logger.info(
-    { responseLength: stdout.length },
+    { responseLength: responseText.length },
     "[HEARTBEAT] Claude CLI response received",
   );
 
-  return stdout;
+  return responseText;
 }
 
 export class HeartbeatLlmClient implements LlmClient {
@@ -298,6 +406,7 @@ export class HeartbeatLlmClient implements LlmClient {
   async audit(
     content: string,
     criteria: string[],
+    options?: LlmGenerateOptions,
   ): Promise<{
     verdict: "pass" | "revise" | "reject" | "human_review";
     severity: "low" | "medium" | "high";
@@ -305,6 +414,8 @@ export class HeartbeatLlmClient implements LlmClient {
     suggestions: string[];
     score: number;
   }> {
+    // P1-C ロールバック (2026-04-14): 順序変更で cost +11%, cache hit率向上はゼロ、
+    // judgment厳しく revise +33% 副作用。実測で cache は元から最大化済みと判明
     const prompt = `以下のコンテンツを監査してください。
 
 ## コンテンツ
@@ -323,6 +434,7 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 }`;
 
     const raw = await this.generate(prompt, {
+      label: options?.label ?? "audit",
       temperature: 0.3,
       systemPrompt: "You are a content auditor. Return ONLY valid JSON.",
       tier: "premium",
@@ -338,10 +450,13 @@ ${criteria.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 
     if (!parsed) {
       logger.warn({ raw }, "Failed to parse heartbeat audit response as JSON");
+      // Fix-2 (2026-04-14): パース失敗は自動 revise でリトライに回す (human_reviewに降らない)。
+      // ExternalApiError等の本当のAPI障害は throw で上位伝播するので、ここに来るのはJSON破損のみ。
+      // リビジョン上限 (MAX_*_REVISION_ATTEMPTS=2) を超えた場合は settle 側で最終判断される。
       return {
-        verdict: "human_review",
-        severity: "medium",
-        reasons: ["LLM応答のパース失敗"],
+        verdict: "revise",
+        severity: "low",
+        reasons: ["LLM応答のパース失敗 (自動再生成)"],
         suggestions: ["JSON形式を維持して再生成する"],
         score: 5,
       };
@@ -361,6 +476,7 @@ export class DryRunLlmClient implements LlmClient {
   async audit(
     _content: string,
     _criteria: string[],
+    _options?: LlmGenerateOptions,
   ): Promise<{
     verdict: "pass" | "revise" | "reject" | "human_review";
     severity: "low" | "medium" | "high";

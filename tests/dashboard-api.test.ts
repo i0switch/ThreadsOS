@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import Fastify from "fastify";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearGlobalDashboardCache } from "../src/services/dashboard-query/request-cache.js";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
@@ -263,11 +264,13 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  clearGlobalDashboardCache();
   await resetDashboardState();
   await seedDashboardState();
 });
 
 afterEach(async () => {
+  clearGlobalDashboardCache();
   await resetDashboardState();
 });
 
@@ -296,7 +299,7 @@ describe("Dashboard API", () => {
         currentTheme: "勝ちテーマ",
         currentPolicy: expect.stringContaining("ファネル拡大"),
         health: "warning",
-        healthHeadline: expect.stringContaining("要確認が2件"),
+        healthHeadline: expect.stringContaining("AIが2件の判断を処理中"),
         healthReasons: expect.arrayContaining([
           expect.stringContaining("手動で止めている処理"),
         ]),

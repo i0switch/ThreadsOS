@@ -1,58 +1,61 @@
 import type { FastifyInstance } from "fastify";
 import * as dq from "../services/dashboard-query/index.js";
+import { withDashboardQueryCache } from "../services/dashboard-query/request-cache.js";
 
 export async function dashboardRoutes(app: FastifyInstance) {
+  const cached = <T>(compute: () => T) => withDashboardQueryCache(compute);
+
   // ── Summary ────────────────────────────────────────────
   app.get("/api/dashboard/summary", async () => {
-    return dq.getSummary();
+    return cached(() => dq.getSummary());
   });
 
   // ── Aggregated Dashboard APIs ──────────────────────────
   app.get("/api/dashboard/home", async () => {
-    return dq.getDashboardHome();
+    return cached(() => dq.getDashboardHome());
   });
 
   app.get("/api/dashboard/inbox", async () => {
-    return dq.getDashboardInbox();
+    return cached(() => dq.getDashboardInbox());
   });
 
   app.get("/api/dashboard/storyboard", async () => {
-    return dq.getDashboardStoryboard();
+    return cached(() => dq.getDashboardStoryboard());
   });
 
   app.get("/api/dashboard/decisions", async () => {
-    return dq.getDashboardDecisions();
+    return cached(() => dq.getDashboardDecisions());
   });
 
   app.get("/api/dashboard/timeline", async () => {
-    return dq.getDashboardTimeline();
+    return cached(() => dq.getDashboardTimeline());
   });
 
   app.get("/api/dashboard/funnel", async () => {
-    return dq.getDashboardFunnel();
+    return cached(() => dq.getDashboardFunnel());
   });
 
   // ── Departments ────────────────────────────────────────
   app.get("/api/dashboard/departments", async () => {
-    return dq.getDepartments();
+    return cached(() => dq.getDepartments());
   });
 
   app.get<{ Params: { department: string } }>(
     "/api/dashboard/departments/:department",
     async (req) => {
-      return dq.getDepartmentDetail(req.params.department);
+      return cached(() => dq.getDepartmentDetail(req.params.department));
     },
   );
 
   // ── Agents ─────────────────────────────────────────────
   app.get("/api/dashboard/agents", async () => {
-    return dq.getAgents();
+    return cached(() => dq.getAgents());
   });
 
   app.get<{ Params: { id: string } }>(
     "/api/dashboard/agents/:id",
     async (req, reply) => {
-      const agent = dq.getAgentDetail(req.params.id);
+      const agent = cached(() => dq.getAgentDetail(req.params.id));
       if (!agent) {
         reply.code(404);
         return { error: "agent not found" };
@@ -65,14 +68,14 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { status?: string } }>(
     "/api/dashboard/proposals",
     async (req) => {
-      return dq.getProposals(req.query.status);
+      return cached(() => dq.getProposals(req.query.status));
     },
   );
 
   app.get<{ Params: { id: string } }>(
     "/api/dashboard/proposals/:id",
     async (req, reply) => {
-      const detail = dq.getProposalDetail(req.params.id);
+      const detail = cached(() => dq.getProposalDetail(req.params.id));
       if (!detail) {
         reply.code(404);
         return { error: "proposal not found" };
@@ -84,7 +87,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>(
     "/api/dashboard/proposals/:id/history",
     async (req, reply) => {
-      const detail = dq.getProposalDetail(req.params.id);
+      const detail = cached(() => dq.getProposalDetail(req.params.id));
       if (!detail) {
         reply.code(404);
         return { error: "proposal not found" };
@@ -118,7 +121,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { status?: string } }>(
     "/api/dashboard/reviews",
     async (req) => {
-      return dq.getReviews(req.query.status);
+      return cached(() => dq.getReviews(req.query.status));
     },
   );
 
@@ -146,7 +149,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
     async (req) => {
       const page = Number(req.query.page) || 1;
       const perPage = Number(req.query.perPage) || 30;
-      return dq.getLogs(page, perPage);
+      return cached(() => dq.getLogs(page, perPage));
     },
   );
 
@@ -230,6 +233,21 @@ export async function dashboardRoutes(app: FastifyInstance) {
 
   // ── KPI ────────────────────────────────────────────────
   app.get("/api/dashboard/kpi", async () => {
-    return dq.getKpi();
+    return cached(() => dq.getKpi());
+  });
+
+  // ── Recent Posts ───────────────────────────────────────
+  app.get("/api/dashboard/recent-posts", async () => {
+    return cached(() => dq.getRecentPosts());
+  });
+
+  // ── Recent Notes ───────────────────────────────────────
+  app.get("/api/dashboard/recent-notes", async () => {
+    return cached(() => dq.getRecentNotes());
+  });
+
+  // ── Heartbeat History ─────────────────────────────────
+  app.get("/api/dashboard/heartbeat-history", async () => {
+    return cached(() => dq.getHeartbeatHistory());
   });
 }
