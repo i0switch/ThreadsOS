@@ -130,6 +130,7 @@ export interface ExecutiveService {
     candidateActions: ScheduledAction[],
     llm: LlmClient,
     errorContext?: ErrorContext,
+    options?: { isDryRun?: boolean },
   ): Promise<HeartbeatCyclePlan>;
   resolveDepartment(actionType: ActionType): DepartmentName;
   recordDepartmentRun(params: {
@@ -468,10 +469,12 @@ ${proposalDetails}
 
   private buildFallbackPlan(
     candidateActions: ScheduledAction[],
+    options?: { isDryRun?: boolean },
   ): HeartbeatCyclePlan {
     // Spec §2 (絶対条件「迷ったら止める」) §20 (confidence 低 → 実行しない) に従い、
     // LLM parse failure 時は何も実行しない。連続失敗時は anomalyEvents 経由で
     // operations-mode が safe_freeze に昇格させる。
+    // dry-run 時は anomaly を記録しない（本番の安全判定を汚染しないため）。
     const cycleId = randomUUID();
     const fallbackReason =
       "LLM response parse failed; safe-stop until next heartbeat (no actions executed)";
@@ -480,20 +483,22 @@ ${proposalDetails}
       reason: fallbackReason,
     }));
 
-    try {
-      const ledger = createRuntimeLedgerRepository();
-      ledger.recordAnomaly({
-        category: "executive_parse_failure",
-        severity: "high",
-        message:
-          "Executive LLM parse failed; safe-stop applied. Connected anomalies feed operations-mode safe_freeze trigger.",
-        metadata: { candidateCount: candidateActions.length, cycleId },
-      });
-    } catch (anomalyErr) {
-      logger.warn(
-        { error: anomalyErr instanceof Error ? anomalyErr.message : String(anomalyErr) },
-        "Failed to record executive_parse_failure anomaly",
-      );
+    if (!options?.isDryRun) {
+      try {
+        const ledger = createRuntimeLedgerRepository();
+        ledger.recordAnomaly({
+          category: "executive_parse_failure",
+          severity: "high",
+          message:
+            "Executive LLM parse failed; safe-stop applied. Connected anomalies feed operations-mode safe_freeze trigger.",
+          metadata: { candidateCount: candidateActions.length, cycleId },
+        });
+      } catch (anomalyErr) {
+        logger.warn(
+          { error: anomalyErr instanceof Error ? anomalyErr.message : String(anomalyErr) },
+          "Failed to record executive_parse_failure anomaly",
+        );
+      }
     }
 
     return {
@@ -527,6 +532,7 @@ ${proposalDetails}
     candidateActions: ScheduledAction[],
     llm: LlmClient,
     errorContext?: ErrorContext,
+    options?: { isDryRun?: boolean },
   ): Promise<HeartbeatCyclePlan> {
     const prompt = this.buildExecutivePrompt(
       reports,
@@ -549,7 +555,7 @@ ${proposalDetails}
         { raw },
         "Executive LLM response parse failed; safe-stop applied (no actions approved)",
       );
-      const fallback = this.buildFallbackPlan(candidateActions);
+      const fallback = this.buildFallbackPlan(candidateActions, { isDryRun: options?.isDryRun });
       const fbNow = new Date().toISOString();
       db.insert(strategyStates)
         .values({

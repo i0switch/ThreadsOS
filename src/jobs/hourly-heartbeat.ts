@@ -580,6 +580,7 @@ await runJob(
         actions,
         llm,
         errorContext,
+        { isDryRun: dryRun },
       );
       const results: string[] = experimentEvaluation.summaries.map(
         (summary) => `EXPERIMENT_EVAL: ${summary}`,

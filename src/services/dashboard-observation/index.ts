@@ -1,4 +1,4 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, gte } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import * as s from "../../db/schema.js";
 import {
@@ -664,4 +664,387 @@ export function listCampaignSummaries(options?: {
   return rows
     .map((row) => getCampaignRevenue(row.id))
     .filter((entry): entry is CampaignRevenueSummary => entry !== null);
+}
+
+// ════════════════════════════════════════════════════════════════
+// 日本語辞書
+// ════════════════════════════════════════════════════════════════
+
+const MODE_LABELS: Record<string, string> = {
+  full_autonomy: "完全自律運転",
+  threads_only: "Threads優先運転",
+  observe_only: "観測優先運転",
+  safe_freeze: "安全停止",
+};
+
+const OBJECTIVE_LABELS: Record<string, string> = {
+  directive_assimilation: "指示処理優先",
+  funnel_expansion: "ファネル拡大",
+  engagement_compounding: "反応強化",
+};
+
+const STAGE_LABELS: Record<string, string> = {
+  bootstrap: "立ち上げ段階",
+  distribution: "配信拡大段階",
+  conversion: "収益化段階",
+  optimization: "最適化段階",
+};
+
+const BOTTLENECK_LABELS: Record<string, string> = {
+  reach: "認知",
+  click: "導線クリック",
+  read: "記事閲覧",
+  buy: "購入",
+  Reach: "認知",
+  Click: "導線クリック",
+  Read: "記事閲覧",
+  Buy: "購入",
+};
+
+const EXPERIMENT_STATUS_LABELS: Record<string, string> = {
+  planned: "計画中",
+  canary_live: "実行中",
+  not_launched: "未着手",
+  awaiting_72h: "72h判定待ち",
+  promoted: "採用",
+  rejected: "不採用",
+};
+
+const RUNNER_STATUS_LABELS: Record<string, string> = {
+  healthy: "正常",
+  degraded: "劣化",
+  tripped: "停止判定",
+};
+
+const AUDITOR_LABELS: Record<string, string> = {
+  pass: "通過",
+  rewrite: "要修正",
+  skip: "見送り",
+  quarantine: "隔離",
+};
+
+function ja(dict: Record<string, string>, key: string | null | undefined): string {
+  return dict[key ?? ""] ?? key ?? "不明";
+}
+
+// ════════════════════════════════════════════════════════════════
+// 1. getDashboardMission — 現在の作戦
+// ════════════════════════════════════════════════════════════════
+
+export interface DashboardMission {
+  generatedAt: string;
+  mode: { key: string; label: string; reason: string };
+  objective: { key: string; label: string };
+  funnelStage: { key: string; label: string };
+  currentAction: string | null;
+  reasoning: string;
+  nextMetric: string | null;
+  lastCycleAt: string | null;
+}
+
+export function getDashboardMission(): DashboardMission {
+  const modeRow = db.select().from(s.operationsModeState).limit(1).get();
+  const cycle = db.select().from(s.executiveCycles).orderBy(desc(s.executiveCycles.startedAt)).limit(1).get();
+
+  let objective = "funnel_expansion";
+  let funnelStage = "bootstrap";
+  let reasoning = "";
+  let currentAction: string | null = null;
+  let nextMetric: string | null = null;
+
+  if (cycle?.decisionJson) {
+    try {
+      const decision = JSON.parse(cycle.decisionJson) as Record<string, unknown>;
+      reasoning = (decision.llmReasoning as string) ?? "";
+      const approved = decision.approvedActions as Array<{ type: string }> | undefined;
+      if (approved?.[0]) currentAction = approved[0].type;
+    } catch { /* ignore */ }
+  }
+  objective = cycle?.objective ?? objective;
+  funnelStage = cycle?.funnelStage ?? funnelStage;
+
+  const latestExp = db.select().from(s.experiments).orderBy(desc(s.experiments.createdAt)).limit(1).get();
+  if (latestExp) nextMetric = latestExp.primaryMetric;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    mode: {
+      key: modeRow?.mode ?? "full_autonomy",
+      label: ja(MODE_LABELS, modeRow?.mode),
+      reason: modeRow?.reason ?? "",
+    },
+    objective: { key: objective, label: ja(OBJECTIVE_LABELS, objective) },
+    funnelStage: { key: funnelStage, label: ja(STAGE_LABELS, funnelStage) },
+    currentAction,
+    reasoning,
+    nextMetric,
+    lastCycleAt: cycle?.startedAt ?? null,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 2. getDashboardRevenue — 収益化の流れ
+// ════════════════════════════════════════════════════════════════
+
+export interface DashboardRevenue {
+  generatedAt: string;
+  funnel: {
+    impressions: number;
+    profileTransitions: number;
+    noteClicks: number;
+    noteViews: number;
+    purchases: number;
+    revenue: number;
+  };
+  funnelRates: Array<{ label: string; value: string; context: string }>;
+  weakestStage: { key: string | null; label: string; reason: string };
+  totalRevenueYen: number;
+  totalPurchases: number;
+  campaigns: CampaignRevenueSummary[];
+  snapshotAt: string | null;
+}
+
+export function getDashboardRevenue(): DashboardRevenue {
+  const latest = db.select().from(s.funnelSnapshots).orderBy(desc(s.funnelSnapshots.capturedAt)).limit(1).get();
+  const funnel = {
+    impressions: latest?.impressions ?? 0,
+    profileTransitions: latest?.profileTransitions ?? 0,
+    noteClicks: latest?.noteClicks ?? 0,
+    noteViews: latest?.noteViews ?? 0,
+    purchases: latest?.purchases ?? 0,
+    revenue: latest?.revenue ?? 0,
+  };
+
+  const stages = [
+    { key: "reach", label: "認知", num: funnel.profileTransitions, den: funnel.impressions },
+    { key: "click", label: "導線クリック", num: funnel.noteClicks, den: funnel.profileTransitions },
+    { key: "read", label: "記事閲覧", num: funnel.noteViews, den: funnel.noteClicks },
+    { key: "buy", label: "購入", num: funnel.purchases, den: funnel.noteViews },
+  ];
+  const funnelRates = stages.map((st) => ({
+    label: st.label,
+    value: st.den > 0 ? `${((st.num / st.den) * 100).toFixed(1)}%` : "0.0%",
+    context: `${st.num}/${st.den}`,
+  }));
+  const weakest = stages.filter((st) => st.den > 0).sort((a, b) => a.num / a.den - b.num / b.den)[0];
+
+  const allRevenue = db.select().from(s.revenueEvents).all();
+  const totalRevenueYen = allRevenue.reduce((sum, r) => sum + (r.amountYen ?? 0), 0);
+  const totalPurchases = allRevenue.reduce((sum, r) => sum + (r.purchasesCount ?? 0), 0);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    funnel,
+    funnelRates,
+    weakestStage: {
+      key: weakest?.key ?? null,
+      label: weakest?.label ?? "未判定",
+      reason: weakest ? `${weakest.label} が最も落ち込んでいます (${funnelRates.find((r) => r.label === weakest.label)?.value})` : "分母が不足しているため判定保留",
+    },
+    totalRevenueYen,
+    totalPurchases,
+    campaigns: listCampaignSummaries({ status: "active" }),
+    snapshotAt: latest?.capturedAt ?? null,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 3. getDashboardExecutive — AIの判断理由
+// ════════════════════════════════════════════════════════════════
+
+export interface DashboardExecutive {
+  generatedAt: string;
+  reasoning: string;
+  approvedActions: Array<{ type: string; reason: string }>;
+  skippedActions: Array<{ type: string; reason: string }>;
+  departmentInstructions: Record<string, string>;
+  contentGuidance: Record<string, unknown> | null;
+  policyUpdates: Record<string, unknown> | null;
+  recentHistory: Array<{ objective: string; funnelStage: string; reasoning: string; createdAt: string }>;
+}
+
+export function getDashboardExecutive(): DashboardExecutive {
+  const cycle = db.select().from(s.executiveCycles).orderBy(desc(s.executiveCycles.startedAt)).limit(1).get();
+  let reasoning = "";
+  let approved: Array<{ type: string; reason: string }> = [];
+  let skipped: Array<{ type: string; reason: string }> = [];
+  let instructions: Record<string, string> = {};
+  let guidance: Record<string, unknown> | null = null;
+  let policyUp: Record<string, unknown> | null = null;
+
+  if (cycle?.decisionJson) {
+    try {
+      const d = JSON.parse(cycle.decisionJson) as Record<string, unknown>;
+      reasoning = (d.llmReasoning as string) ?? "";
+      approved = ((d.approvedActions ?? []) as Array<{ type: string; reason?: string }>).map((a) => ({ type: a.type, reason: a.reason ?? "" }));
+      skipped = ((d.skippedActions ?? []) as Array<{ action?: { type: string }; type?: string; reason: string }>).map((s) => ({ type: s.action?.type ?? s.type ?? "", reason: s.reason }));
+      instructions = (d.departmentInstructions as Record<string, string>) ?? {};
+      guidance = (d.contentGuidance as Record<string, unknown>) ?? null;
+      policyUp = (d.policyUpdates as Record<string, unknown>) ?? null;
+    } catch { /* ignore */ }
+  }
+
+  const history = db.select().from(s.strategyHistory).orderBy(desc(s.strategyHistory.createdAt)).limit(5).all().map((h) => ({
+    objective: ja(OBJECTIVE_LABELS, h.objective),
+    funnelStage: ja(STAGE_LABELS, h.funnelStage),
+    reasoning: h.reasoning.slice(0, 200),
+    createdAt: h.createdAt,
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    reasoning,
+    approvedActions: approved,
+    skippedActions: skipped,
+    departmentInstructions: instructions,
+    contentGuidance: guidance,
+    policyUpdates: policyUp,
+    recentHistory: history,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 4. getDashboardDepartments — 各部署の動き
+// ════════════════════════════════════════════════════════════════
+
+export interface DashboardDepartment {
+  name: string;
+  label: string;
+  lastSummary: string | null;
+  lastRunAt: string | null;
+  recentNotifications: Array<{ from: string; type: string; content: string; createdAt: string }>;
+}
+
+export interface DashboardDepartments {
+  generatedAt: string;
+  departments: DashboardDepartment[];
+}
+
+const DEPT_LABELS: Record<string, string> = {
+  command: "指揮部門",
+  "external-research": "リサーチ部門",
+  "competitive-analysis": "競合分析部門",
+  threads: "Threads運用部門",
+  note: "note運用部門",
+};
+
+export function getDashboardDepartments(): DashboardDepartments {
+  const depts = ["command", "external-research", "competitive-analysis", "threads", "note"];
+
+  return {
+    generatedAt: new Date().toISOString(),
+    departments: depts.map((name) => {
+      const summary = db.select().from(s.departmentSummaries).where(eq(s.departmentSummaries.department, name)).orderBy(desc(s.departmentSummaries.updatedAt)).limit(1).get();
+      const lastRun = db.select().from(s.departmentRuns).where(eq(s.departmentRuns.department, name)).orderBy(desc(s.departmentRuns.createdAt)).limit(1).get();
+      const notifications = db.select().from(s.departmentNotifications).where(eq(s.departmentNotifications.toDepartment, name)).orderBy(desc(s.departmentNotifications.createdAt)).limit(3).all().map((n) => ({
+        from: DEPT_LABELS[n.fromDepartment] ?? n.fromDepartment,
+        type: n.notificationType,
+        content: n.content.slice(0, 200),
+        createdAt: n.createdAt,
+      }));
+
+      return {
+        name,
+        label: DEPT_LABELS[name] ?? name,
+        lastSummary: summary?.content?.slice(0, 300) ?? null,
+        lastRunAt: lastRun?.createdAt ?? null,
+        recentNotifications: notifications,
+      };
+    }),
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 5. getDashboardExperiments — 実験
+// ════════════════════════════════════════════════════════════════
+
+export interface DashboardExperiment {
+  id: string;
+  status: string;
+  statusLabel: string;
+  bottleneck: string;
+  bottleneckLabel: string;
+  patternKey: string;
+  hypothesis: string;
+  primaryMetric: string;
+  launchedAt: string | null;
+  promotedAt: string | null;
+  rejectedAt: string | null;
+  createdAt: string;
+}
+
+export interface DashboardExperiments {
+  generatedAt: string;
+  active: DashboardExperiment[];
+  winCount: number;
+  loseCount: number;
+  recentWins: Array<{ patternKey: string; metric: string; observedValue: number; createdAt: string }>;
+  recentLosses: Array<{ patternKey: string; metric: string; observedValue: number; createdAt: string }>;
+}
+
+export function getDashboardExperiments(): DashboardExperiments {
+  const active = db.select().from(s.experiments).where(
+    eq(s.experiments.status, "planned"),
+  ).all();
+  const canary = db.select().from(s.experiments).where(
+    eq(s.experiments.status, "canary_live"),
+  ).all();
+  const awaiting = db.select().from(s.experiments).where(
+    eq(s.experiments.status, "awaiting_72h"),
+  ).all();
+  const allActive = [...active, ...canary, ...awaiting];
+
+  const wins = db.select().from(s.winningPatterns).orderBy(desc(s.winningPatterns.createdAt)).limit(5).all();
+  const losses = db.select().from(s.losingPatterns).orderBy(desc(s.losingPatterns.createdAt)).limit(5).all();
+
+  return {
+    generatedAt: new Date().toISOString(),
+    active: allActive.map((e) => ({
+      id: e.id,
+      status: e.status,
+      statusLabel: ja(EXPERIMENT_STATUS_LABELS, e.status),
+      bottleneck: e.bottleneck,
+      bottleneckLabel: ja(BOTTLENECK_LABELS, e.bottleneck),
+      patternKey: e.patternKey,
+      hypothesis: e.hypothesis,
+      primaryMetric: e.primaryMetric,
+      launchedAt: e.launchedAt,
+      promotedAt: e.promotedAt,
+      rejectedAt: e.rejectedAt,
+      createdAt: e.createdAt,
+    })),
+    winCount: db.select().from(s.winningPatterns).all().length,
+    loseCount: db.select().from(s.losingPatterns).all().length,
+    recentWins: wins.map((w) => ({ patternKey: w.patternKey, metric: w.primaryMetric, observedValue: w.observedValue, createdAt: w.createdAt })),
+    recentLosses: losses.map((l) => ({ patternKey: l.patternKey, metric: l.primaryMetric, observedValue: l.observedValue, createdAt: l.createdAt })),
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+// 6. getDashboardSystem — システム詳細
+// ════════════════════════════════════════════════════════════════
+
+export interface DashboardSystem {
+  generatedAt: string;
+  runnerHealth: DashboardObservationResponse["runnerHealth"];
+  sessionHealth: DashboardObservationResponse["sessionHealth"];
+  outbox: DashboardObservationResponse["outbox"];
+  anomalies: DashboardObservationResponse["anomalies"];
+  rollbacks: DashboardObservationResponse["rollbacks"];
+  auditor: DashboardObservationResponse["auditor"];
+  contracts: DashboardObservationResponse["contracts"];
+}
+
+export function getDashboardSystem(): DashboardSystem {
+  const obs = getDashboardObservation();
+  return {
+    generatedAt: obs.generatedAt,
+    runnerHealth: obs.runnerHealth,
+    sessionHealth: obs.sessionHealth,
+    outbox: obs.outbox,
+    anomalies: obs.anomalies,
+    rollbacks: obs.rollbacks,
+    auditor: obs.auditor,
+    contracts: obs.contracts,
+  };
 }

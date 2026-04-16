@@ -3,578 +3,260 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ThreadsOS Observation</title>
+  <title>ThreadsOS 司令室</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:," />
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f4f0e8;
-      --panel: rgba(255, 251, 244, 0.92);
-      --panel-strong: rgba(255, 248, 236, 0.98);
-      --line: rgba(84, 66, 48, 0.14);
-      --text: #1e1a16;
-      --muted: #6d6458;
-      --good: #1f7a4f;
-      --warn: #b06a19;
-      --bad: #b43b2b;
-      --accent: #0b6e72;
-      --ink: #0f172a;
+      --bg: #0f1117;
+      --panel: rgba(22, 27, 38, 0.95);
+      --panel-strong: rgba(30, 36, 50, 0.98);
+      --line: rgba(255,255,255,0.08);
+      --text: #e8e6e3;
+      --muted: #8b8a87;
+      --good: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --accent: #38bdf8;
+      --accent2: #a78bfa;
+      --ink: #ffffff;
     }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-family: "IBM Plex Sans JP", sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+    body { max-width: 1200px; margin: 0 auto; padding: 16px; }
 
-    * { box-sizing: border-box; }
-    html {
-      font-family: "IBM Plex Sans JP", "Hiragino Sans", sans-serif;
-      background:
-        radial-gradient(circle at 15% 10%, rgba(11, 110, 114, 0.08), transparent 20%),
-        radial-gradient(circle at 88% 18%, rgba(176, 106, 25, 0.1), transparent 24%),
-        linear-gradient(180deg, #fcfaf5 0%, #f4f0e8 55%, #ece4d7 100%);
-      min-height: 100%;
-    }
-    body {
-      margin: 0;
-      color: var(--text);
-      min-height: 100vh;
-    }
-    .wrap {
-      width: min(1180px, calc(100vw - 24px));
-      margin: 0 auto;
-      padding: 22px 0 40px;
-    }
-    .hero {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: 1.4fr 1fr;
-      align-items: stretch;
-    }
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 28px;
-      box-shadow: 0 18px 40px rgba(61, 48, 31, 0.09);
-      backdrop-filter: blur(18px);
-      margin-top: 16px;
-    }
-    .panel:first-of-type,
-    .hero .panel {
-      margin-top: 0;
-    }
-    .panel-strong {
-      background: var(--panel-strong);
-    }
-    .panel-body {
-      padding: 22px;
-    }
-    .eyebrow {
-      font-size: 11px;
-      letter-spacing: 0.22em;
-      text-transform: uppercase;
-      color: var(--muted);
-      font-weight: 700;
-    }
-    .title {
-      font-family: "Space Grotesk", sans-serif;
-      font-size: clamp(32px, 4.8vw, 54px);
-      line-height: 0.95;
-      letter-spacing: -0.05em;
-      margin: 6px 0 10px;
-    }
-    .headline {
-      font-family: "Space Grotesk", sans-serif;
-      font-size: 26px;
-      line-height: 1.05;
-      letter-spacing: -0.04em;
-      margin: 0;
-    }
-    .subtle {
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.7;
-    }
-    .chip-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 14px;
-    }
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border-radius: 999px;
-      padding: 9px 14px;
-      border: 1px solid var(--line);
-      font-size: 12px;
-      font-weight: 700;
-      background: rgba(255, 255, 255, 0.72);
-    }
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 18px;
-    }
-    .metric-card {
-      border-radius: 20px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.74);
-      padding: 16px;
-      min-height: 120px;
-    }
-    .metric-label {
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--muted);
-      font-weight: 700;
-    }
-    .metric-value {
-      font-family: "Space Grotesk", sans-serif;
-      font-size: 28px;
-      line-height: 1.05;
-      letter-spacing: -0.04em;
-      margin: 10px 0 8px;
-    }
-    .metric-context {
-      font-size: 13px;
-      line-height: 1.6;
-      color: var(--muted);
-    }
-    .section-title {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 12px;
-    }
-    .section-title h2 {
-      font-family: "Space Grotesk", sans-serif;
-      font-size: 23px;
-      line-height: 1.05;
-      letter-spacing: -0.04em;
-      margin: 0;
-    }
-    .section-grid {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-    .dense-grid {
-      display: grid;
-      gap: 12px;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-    .contract-grid {
-      display: grid;
-      gap: 16px;
-      grid-template-columns: 1.2fr 1fr 1fr;
-    }
-    .list {
-      display: grid;
-      gap: 10px;
-    }
-    .item {
-      padding: 14px 16px;
-      border-radius: 18px;
-      border: 1px solid var(--line);
-      background: rgba(255, 255, 255, 0.72);
-    }
-    .item-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      margin-bottom: 6px;
-    }
-    .item-title {
-      font-size: 14px;
-      font-weight: 700;
-      color: var(--ink);
-    }
-    .item-meta {
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .item-copy {
-      font-size: 13px;
-      line-height: 1.7;
-      color: var(--muted);
-    }
-    .status {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      min-width: 94px;
-      border-radius: 999px;
-      padding: 7px 12px;
-      border: 1px solid currentColor;
-      font-size: 12px;
-      font-weight: 700;
-      background: rgba(255, 255, 255, 0.72);
-    }
-    .good { color: var(--good); }
-    .warn { color: var(--warn); }
-    .bad { color: var(--bad); }
-    .accent { color: var(--accent); }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 12px;
-    }
-    .empty {
-      color: var(--muted);
-      font-size: 14px;
-      line-height: 1.7;
-      padding: 18px;
-      border: 1px dashed var(--line);
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.4);
-    }
-    .footer-note {
-      margin-top: 18px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    #errorBox {
-      display: none;
-      margin-bottom: 16px;
-      padding: 14px 16px;
-      border-radius: 18px;
-      border: 1px solid rgba(180, 59, 43, 0.22);
-      background: rgba(180, 59, 43, 0.08);
-      color: var(--bad);
-      font-size: 14px;
-      font-weight: 700;
-    }
-    @media (max-width: 980px) {
-      .hero,
-      .section-grid,
-      .dense-grid,
-      .contract-grid,
-      .metric-grid {
-        grid-template-columns: 1fr;
-      }
-    }
+    .hero { text-align: center; padding: 24px 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
+    .hero h1 { font-family: "Space Grotesk", monospace; font-size: 1.6rem; color: var(--ink); letter-spacing: 0.04em; }
+    .hero .sub { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+
+    .section { margin-bottom: 20px; }
+    .section-title { font-size: 1rem; font-weight: 700; color: var(--accent); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .section-title::before { content: attr(data-icon); font-size: 1.1rem; }
+
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 10px; }
+    .card-strong { background: var(--panel-strong); }
+
+    .kv { display: grid; grid-template-columns: 140px 1fr; gap: 4px 12px; font-size: 0.88rem; }
+    .kv dt { color: var(--muted); }
+    .kv dd { color: var(--text); font-weight: 500; }
+
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-good { background: rgba(52,211,153,0.15); color: var(--good); }
+    .badge-warn { background: rgba(251,191,36,0.15); color: var(--warn); }
+    .badge-bad { background: rgba(248,113,113,0.15); color: var(--bad); }
+    .badge-accent { background: rgba(56,189,248,0.15); color: var(--accent); }
+
+    .funnel-bar { display: flex; gap: 4px; margin: 12px 0; }
+    .funnel-step { flex: 1; text-align: center; padding: 10px 4px; border-radius: 8px; background: rgba(255,255,255,0.04); border: 1px solid var(--line); }
+    .funnel-step .label { font-size: 0.72rem; color: var(--muted); }
+    .funnel-step .value { font-size: 1.1rem; font-weight: 700; color: var(--ink); margin: 2px 0; }
+    .funnel-step .rate { font-size: 0.72rem; color: var(--accent); }
+    .funnel-step.weak { border-color: var(--bad); background: rgba(248,113,113,0.06); }
+
+    .reason-box { background: rgba(56,189,248,0.06); border-left: 3px solid var(--accent); padding: 10px 14px; border-radius: 0 6px 6px 0; font-size: 0.88rem; line-height: 1.6; color: var(--text); margin: 8px 0; }
+
+    .dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+    .dept-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+    .dept-card h4 { font-size: 0.85rem; color: var(--accent2); margin-bottom: 6px; }
+    .dept-card p { font-size: 0.8rem; color: var(--muted); line-height: 1.5; }
+
+    .exp-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 0.85rem; }
+    .exp-row:last-child { border-bottom: none; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+
+    .collapsible-content { display: none; }
+    .collapsible-content.open { display: block; }
+
+    .timestamp { font-size: 0.72rem; color: var(--muted); }
+    .loading { text-align: center; padding: 40px; color: var(--muted); }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div id="errorBox"></div>
-
-    <section class="hero">
-      <article class="panel panel-strong">
-        <div class="panel-body">
-          <div class="eyebrow">Observation-First</div>
-          <h1 class="title">ThreadsOS</h1>
-          <p class="subtle" id="heroReason">観測データを読み込み中...</p>
-          <div class="chip-row" id="heroChips"></div>
-          <div class="metric-grid" id="bottleneckMetrics"></div>
-        </div>
-      </article>
-
-      <article class="panel">
-        <div class="panel-body">
-          <div class="eyebrow">Current State</div>
-          <h2 class="headline" id="modeLabel">--</h2>
-          <p class="subtle" id="modeReason">状態を評価中...</p>
-          <div class="chip-row" id="metaChips"></div>
-          <div class="footer-note" id="lastUpdated">最終更新: --</div>
-        </div>
-      </article>
-    </section>
-
-    <section class="panel">
-      <div class="panel-body">
-        <div class="section-title">
-          <h2>Runtime Health</h2>
-          <span class="eyebrow">runner / session / outbox</span>
-        </div>
-        <div class="section-grid">
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Runner Health</div>
-            <div class="list" id="runnerHealth"></div>
-          </div>
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Session Health</div>
-            <div class="list" id="sessionHealth"></div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-body">
-        <div class="section-title">
-          <h2>Execution Ledger</h2>
-          <span class="eyebrow">outbox / anomaly / evidence / rollback</span>
-        </div>
-        <div class="dense-grid">
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Outbox</div>
-            <div class="chip-row" id="outboxCounts"></div>
-            <div class="list" id="outboxItems" style="margin-top:12px;"></div>
-          </div>
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Anomalies</div>
-            <div class="list" id="anomalies"></div>
-          </div>
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Rollbacks</div>
-            <div class="list" id="rollbacks"></div>
-          </div>
-        </div>
-        <div style="margin-top:16px;">
-          <div class="eyebrow" style="margin-bottom:10px;">Decision Evidence</div>
-          <div class="list" id="decisionEvidence"></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-body">
-        <div class="section-title">
-          <h2>Auditor</h2>
-          <span class="eyebrow">pass / rewrite / skip / quarantine</span>
-        </div>
-        <div class="chip-row" id="auditorCounts"></div>
-        <div class="list" id="auditorItems" style="margin-top:12px;"></div>
-      </div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-body">
-        <div class="section-title">
-          <h2>Contracts</h2>
-          <span class="eyebrow">agents / playbooks / policies</span>
-        </div>
-        <div class="chip-row" id="contractSummary"></div>
-        <div class="contract-grid" style="margin-top:12px;">
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Agents</div>
-            <div class="list" id="contractAgents"></div>
-          </div>
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Playbooks</div>
-            <div class="list" id="contractPlaybooks"></div>
-          </div>
-          <div>
-            <div class="eyebrow" style="margin-bottom:10px;">Policies</div>
-            <div class="list" id="contractPolicies"></div>
-          </div>
-        </div>
-      </div>
-    </section>
+  <div class="hero">
+    <h1>ThreadsOS 司令室</h1>
+    <p class="sub">AI 自律運転の経営 OS</p>
   </div>
+
+  <div id="app"><div class="loading">読み込み中...</div></div>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const esc = (value) => String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-    const fd = (value) => {
-      if (!value) return "--";
-      const date = new Date(value);
-      return Number.isNaN(date.getTime()) ? "--" : date.toLocaleString("ja-JP");
-    };
+    const h = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
-    function toneClass(value) {
-      const normalized = String(value ?? "").toLowerCase();
-      if (["healthy", "full_autonomy", "pass", "approved", "completed", "executed"].includes(normalized)) return "good";
-      if (["degraded", "warning", "rewrite", "observe_only", "threads_only", "processing", "pending"].includes(normalized)) return "warn";
-      if (["tripped", "quarantine", "failed", "safe_freeze", "rejected", "skip", "high"].includes(normalized)) return "bad";
-      return "accent";
+    function modeBadge(key) {
+      const cls = key === 'full_autonomy' ? 'badge-good' : key === 'safe_freeze' ? 'badge-bad' : 'badge-warn';
+      return cls;
     }
 
-    function empty(text) {
-      return `<div class="empty">${esc(text)}</div>`;
+    function renderMission(d) {
+      return `
+        <div class="card card-strong">
+          <dl class="kv">
+            <dt>運転モード</dt><dd><span class="badge ${modeBadge(d.mode.key)}">${h(d.mode.label)}</span></dd>
+            <dt>今回の目的</dt><dd>${h(d.objective.label)}</dd>
+            <dt>現在の段階</dt><dd>${h(d.funnelStage.label)}</dd>
+            <dt>今回の1手</dt><dd><strong>${h(d.currentAction ?? '(なし)')}</strong></dd>
+            <dt>次に見る指標</dt><dd>${h(d.nextMetric ?? '-')}</dd>
+            <dt>最終判断</dt><dd class="timestamp">${d.lastCycleAt ? new Date(d.lastCycleAt).toLocaleString('ja-JP') : '-'}</dd>
+          </dl>
+          ${d.reasoning ? `<div class="reason-box">${h(d.reasoning)}</div>` : ''}
+        </div>`;
     }
 
-    function itemBlock(title, meta, copy, tone = "accent") {
-      return `<div class="item">
-        <div class="item-head">
-          <div class="item-title">${esc(title)}</div>
-          <span class="status ${toneClass(tone)}">${esc(meta)}</span>
-        </div>
-        <div class="item-copy">${esc(copy)}</div>
+    function renderRevenue(d) {
+      const steps = [
+        { label: '表示', val: d.funnel.impressions },
+        { label: '遷移', val: d.funnel.profileTransitions },
+        { label: 'noteクリック', val: d.funnel.noteClicks },
+        { label: 'note閲覧', val: d.funnel.noteViews },
+        { label: '購入', val: d.funnel.purchases },
+        { label: '売上', val: d.funnel.revenue + '円' },
+      ];
+      const weakKey = d.weakestStage.key;
+      const funnelHtml = steps.map((s, i) => {
+        const rate = d.funnelRates[i] ? d.funnelRates[i].value : '';
+        const isWeak = d.funnelRates[i] && d.funnelRates[i].label === d.weakestStage.label;
+        return `<div class="funnel-step ${isWeak ? 'weak' : ''}">
+          <div class="label">${s.label}</div>
+          <div class="value">${typeof s.val === 'number' ? s.val.toLocaleString() : s.val}</div>
+          ${rate ? `<div class="rate">${rate}</div>` : ''}
+        </div>`;
+      }).join('<div style="display:flex;align-items:center;color:var(--muted);font-size:0.7rem">&#9654;</div>');
+
+      return `
+        <div class="card">
+          <div class="funnel-bar">${funnelHtml}</div>
+          <div class="reason-box">${h(d.weakestStage.reason)}</div>
+          <dl class="kv" style="margin-top:8px">
+            <dt>累計売上</dt><dd><strong>${d.totalRevenueYen.toLocaleString()}円</strong></dd>
+            <dt>累計購入数</dt><dd>${d.totalPurchases}件</dd>
+          </dl>
+        </div>`;
+    }
+
+    function renderExecutive(d) {
+      const approved = d.approvedActions.map(a => `<span class="badge badge-good">${h(a.type)}</span>`).join(' ');
+      const skipped = d.skippedActions.slice(0, 3).map(a => `<span class="badge badge-warn">${h(a.type)}</span>`).join(' ');
+      const instHtml = Object.entries(d.departmentInstructions).map(([k,v]) => `<dt>${h(k)}</dt><dd>${h(v)}</dd>`).join('');
+      const histHtml = d.recentHistory.map(h2 => `<tr><td>${h2.objective}</td><td>${h2.funnelStage}</td><td>${h(h2.reasoning)}</td><td class="timestamp">${new Date(h2.createdAt).toLocaleString('ja-JP')}</td></tr>`).join('');
+
+      return `
+        <div class="card">
+          ${d.reasoning ? `<div class="reason-box">${h(d.reasoning)}</div>` : ''}
+          <dl class="kv" style="margin-top:8px">
+            <dt>採用した行動</dt><dd>${approved || '(なし)'}</dd>
+            <dt>見送った行動</dt><dd>${skipped || '(なし)'}</dd>
+          </dl>
+          ${instHtml ? `<h4 style="color:var(--accent);font-size:0.85rem;margin-top:12px">部署への指示</h4><dl class="kv">${instHtml}</dl>` : ''}
+          ${histHtml ? `<h4 style="color:var(--accent);font-size:0.85rem;margin-top:12px">判断履歴</h4><table><thead><tr><th>目的</th><th>段階</th><th>理由</th><th>日時</th></tr></thead><tbody>${histHtml}</tbody></table>` : ''}
+        </div>`;
+    }
+
+    function renderDepartments(d) {
+      return `<div class="dept-grid">${d.departments.map(dept => `
+        <div class="dept-card">
+          <h4>${h(dept.label)}</h4>
+          <p>${h(dept.lastSummary?.slice(0, 120) ?? '(未稼働)')}</p>
+          ${dept.lastRunAt ? `<p class="timestamp">最終実行: ${new Date(dept.lastRunAt).toLocaleString('ja-JP')}</p>` : ''}
+        </div>`).join('')}</div>`;
+    }
+
+    function renderExperiments(d) {
+      const activeHtml = d.active.length > 0 ? d.active.map(e => `
+        <div class="exp-row">
+          <div>
+            <span class="badge badge-accent">${h(e.statusLabel)}</span>
+            <strong style="margin-left:6px">${h(e.bottleneckLabel)}</strong>: ${h(e.hypothesis.slice(0, 60))}
+          </div>
+          <div class="timestamp">${e.createdAt ? new Date(e.createdAt).toLocaleDateString('ja-JP') : ''}</div>
+        </div>`).join('') : '<p style="color:var(--muted)">現在実行中の実験はありません</p>';
+
+      const winsHtml = d.recentWins.map(w => `<span class="badge badge-good" style="margin:2px">${h(w.patternKey)}</span>`).join('');
+      const lossHtml = d.recentLosses.map(l => `<span class="badge badge-bad" style="margin:2px">${h(l.patternKey)}</span>`).join('');
+
+      return `
+        <div class="card">
+          ${activeHtml}
+          <dl class="kv" style="margin-top:12px">
+            <dt>勝ちパターン</dt><dd>${d.winCount}件 ${winsHtml}</dd>
+            <dt>負けパターン</dt><dd>${d.loseCount}件 ${lossHtml}</dd>
+          </dl>
+        </div>`;
+    }
+
+    function renderSystem(d) {
+      const runnerRows = d.runnerHealth.map(r => `<tr>
+        <td>${h(r.runner)}</td>
+        <td><span class="badge ${r.status==='healthy'?'badge-good':r.status==='tripped'?'badge-bad':'badge-warn'}">${h(r.status)}</span></td>
+        <td>${r.totalCalls}</td>
+        <td>${r.budget ? `${r.budget.callsUsed}/${r.budget.callsLimit}` : '-'}</td>
+        <td class="timestamp">${r.lastSuccessAt ? new Date(r.lastSuccessAt).toLocaleString('ja-JP') : '-'}</td>
+      </tr>`).join('');
+
+      const anomalyRows = d.anomalies.map(a => `<tr>
+        <td><span class="badge ${a.severity==='high'?'badge-bad':'badge-warn'}">${h(a.severity)}</span></td>
+        <td>${h(a.category)}</td>
+        <td>${h(a.message.slice(0,80))}</td>
+        <td class="timestamp">${new Date(a.detectedAt).toLocaleString('ja-JP')}</td>
+      </tr>`).join('');
+
+      const auditorHtml = Object.entries(d.auditor.counts).map(([k,v]) => `${k}: ${v}`).join(' / ');
+
+      return `
+        <div class="card">
+          <h4 style="color:var(--accent);margin-bottom:8px">LLM実行状況</h4>
+          <table><thead><tr><th>Runner</th><th>状態</th><th>総呼出</th><th>予算消費</th><th>最終成功</th></tr></thead><tbody>${runnerRows}</tbody></table>
+
+          ${d.anomalies.length > 0 ? `<h4 style="color:var(--accent);margin:12px 0 8px">異常検知 (${d.anomalies.length}件)</h4>
+          <table><thead><tr><th>重大度</th><th>種別</th><th>内容</th><th>検知日時</th></tr></thead><tbody>${anomalyRows}</tbody></table>` : ''}
+
+          <dl class="kv" style="margin-top:12px">
+            <dt>監査結果</dt><dd>${auditorHtml}</dd>
+            <dt>運用ルール</dt><dd>${d.contracts.summary.agents} agents / ${d.contracts.summary.playbooks} playbooks / ${d.contracts.summary.policies} policies</dd>
+            <dt>投稿キュー</dt><dd>${JSON.stringify(d.outbox.counts)}</dd>
+            <dt>巻き戻し</dt><dd>${d.rollbacks.length}件</dd>
+          </dl>
+        </div>`;
+    }
+
+    function makeSection(icon, title, id, content) {
+      return `<div class="section">
+        <div class="section-title" data-icon="${icon}" onclick="this.nextElementSibling.classList.toggle('open')">${title}</div>
+        <div class="collapsible-content open" id="${id}">${content}</div>
       </div>`;
     }
 
-    async function loadObservation() {
-      const response = await fetch("/api/dashboard/observation");
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}`);
-      }
-      return response.json();
-    }
-
-    function renderHero(data) {
-      $("heroReason").textContent = `${data.bottleneck.label}: ${data.bottleneck.reason}`;
-      $("modeLabel").textContent = data.mode.label;
-      $("modeReason").textContent = data.mode.reason;
-      $("lastUpdated").textContent = `最終更新: ${fd(data.generatedAt)}`;
-
-      $("heroChips").innerHTML = [
-        `<span class="chip ${toneClass(data.mode.current)}">Mode ${esc(data.mode.current)}</span>`,
-        `<span class="chip ${toneClass(data.bottleneck.stage ? "rewrite" : "degraded")}">Bottleneck ${esc(data.bottleneck.label)}</span>`,
-        `<span class="chip accent">Snapshot ${esc(fd(data.bottleneck.snapshotAt))}</span>`
-      ].join("");
-
-      $("metaChips").innerHTML = [
-        `<span class="chip ${toneClass(data.mode.current)}">${esc(data.mode.label)}</span>`,
-        `<span class="chip accent">Contracts ${esc(data.contracts.summary.agents + data.contracts.summary.playbooks + data.contracts.summary.policies)}</span>`,
-        `<span class="chip accent">Compiled ${esc(fd(data.contracts.compiledAt))}</span>`
-      ].join("");
-
-      $("bottleneckMetrics").innerHTML = (data.bottleneck.metrics ?? []).length
-        ? data.bottleneck.metrics.map((metric) => `
-            <div class="metric-card">
-              <div class="metric-label">${esc(metric.label)}</div>
-              <div class="metric-value">${esc(metric.value)}</div>
-              <div class="metric-context">${esc(metric.context)}</div>
-            </div>
-          `).join("")
-        : empty("funnel snapshot がまだありません");
-    }
-
-    function renderRunnerHealth(data) {
-      $("runnerHealth").innerHTML = data.runnerHealth.length
-        ? data.runnerHealth.map((runner) => itemBlock(
-            `${runner.runner} / ${runner.lastModel ?? "model n/a"}`,
-            runner.status,
-            `fails=${runner.consecutiveFailures}, calls=${runner.totalCalls}, budget=${runner.budget ? `${runner.budget.callsUsed}/${runner.budget.callsLimit}` : "n/a"}`,
-            runner.status,
-          )).join("")
-        : empty("runner health の記録がありません");
-    }
-
-    function renderSessionHealth(data) {
-      $("sessionHealth").innerHTML = data.sessionHealth.length
-        ? data.sessionHealth.map((session) => itemBlock(
-            `${session.scope} / ${session.provider}`,
-            session.state,
-            `${session.detail ?? "detailなし"} / success=${fd(session.lastSuccessAt)} / failure=${fd(session.lastFailureAt)}`,
-            session.state,
-          )).join("")
-        : empty("session health の記録がありません");
-    }
-
-    function renderLedger(data) {
-      const countEntries = Object.entries(data.outbox.counts ?? {});
-      $("outboxCounts").innerHTML = countEntries.length
-        ? countEntries.map(([key, value]) => `<span class="chip ${toneClass(key)}">${esc(key)} ${esc(value)}</span>`).join("")
-        : `<span class="chip accent">outbox 0</span>`;
-
-      $("outboxItems").innerHTML = data.outbox.items.length
-        ? data.outbox.items.map((item) => itemBlock(
-            `${item.targetPlatform} / ${item.operationType}`,
-            item.status,
-            `attempts=${item.attempts} / ${item.lastError ?? "errorなし"} / ${fd(item.updatedAt)}`,
-            item.status,
-          )).join("")
-        : empty("pending outbox はありません");
-
-      $("anomalies").innerHTML = data.anomalies.length
-        ? data.anomalies.map((item) => itemBlock(
-            item.category,
-            item.severity,
-            `${item.message} / ${fd(item.detectedAt)}`,
-            item.severity,
-          )).join("")
-        : empty("anomaly は記録されていません");
-
-      $("rollbacks").innerHTML = data.rollbacks.length
-        ? data.rollbacks.map((item) => itemBlock(
-            `${item.scope} / ${item.trigger}`,
-            item.status,
-            `${item.reason} / ${fd(item.createdAt)}`,
-            item.status,
-          )).join("")
-        : empty("rollback history はまだありません");
-
-      $("decisionEvidence").innerHTML = data.decisionEvidence.length
-        ? data.decisionEvidence.map((item) => `
-            <div class="item">
-              <div class="item-head">
-                <div class="item-title">${esc(item.entityType)} / ${esc(item.decisionType)}</div>
-                <span class="item-meta mono">${esc(fd(item.createdAt))}</span>
-              </div>
-              <div class="item-copy mono">${esc(item.entityId)} :: ${esc(item.summary)}</div>
-            </div>
-          `).join("")
-        : empty("decision evidence はまだありません");
-    }
-
-    function renderAuditor(data) {
-      const counts = data.auditor.counts;
-      $("auditorCounts").innerHTML = ["pass", "rewrite", "skip", "quarantine"].map((key) =>
-        `<span class="chip ${toneClass(key)}">${esc(key)} ${esc(counts[key] ?? 0)}</span>`
-      ).join("");
-
-      $("auditorItems").innerHTML = data.auditor.items.length
-        ? data.auditor.items.map((item) => itemBlock(
-            `${item.subjectType} / ${item.subjectId}`,
-            item.action,
-            `${item.reason} / source=${item.source} / ${fd(item.createdAt)}`,
-            item.action,
-          )).join("")
-        : empty("auditor の新しい記録はありません");
-    }
-
-    function renderContracts(data) {
-      $("contractSummary").innerHTML = [
-        `<span class="chip accent">agents ${esc(data.contracts.summary.agents)}</span>`,
-        `<span class="chip accent">playbooks ${esc(data.contracts.summary.playbooks)}</span>`,
-        `<span class="chip accent">policies ${esc(data.contracts.summary.policies)}</span>`
-      ].join("");
-
-      $("contractAgents").innerHTML = data.contracts.agents.map((item) => itemBlock(
-        `${item.id} / ${item.department}`,
-        item.primaryRunner,
-        `fallback=${item.fallbackRunner}, budget=${item.llmBudget}, action=${item.fallback}`,
-        "accent",
-      )).join("");
-
-      $("contractPlaybooks").innerHTML = data.contracts.playbooks.map((item) => itemBlock(
-        `${item.id}`,
-        item.owner,
-        `steps=${item.stepCount}`,
-        "accent",
-      )).join("");
-
-      $("contractPolicies").innerHTML = data.contracts.policies.map((item) => itemBlock(
-        `${item.id}`,
-        item.scope,
-        `rules=${item.ruleCount}`,
-        "accent",
-      )).join("");
-    }
-
-    async function refresh() {
+    async function loadAll() {
       try {
-        const data = await loadObservation();
-        $("errorBox").style.display = "none";
-        renderHero(data);
-        renderRunnerHealth(data);
-        renderSessionHealth(data);
-        renderLedger(data);
-        renderAuditor(data);
-        renderContracts(data);
-      } catch (error) {
-        $("errorBox").style.display = "block";
-        $("errorBox").textContent = error instanceof Error ? error.message : String(error);
+        const [mission, revenue, executive, departments, experiments, system] = await Promise.all([
+          fetch('/api/dashboard/mission').then(r => r.json()),
+          fetch('/api/dashboard/revenue').then(r => r.json()),
+          fetch('/api/dashboard/executive').then(r => r.json()),
+          fetch('/api/dashboard/departments').then(r => r.json()),
+          fetch('/api/dashboard/experiments').then(r => r.json()),
+          fetch('/api/dashboard/system').then(r => r.json()),
+        ]);
+
+        document.getElementById('app').innerHTML = [
+          makeSection('', '現在の作戦', 'sec-mission', renderMission(mission)),
+          makeSection('', '収益化の流れ', 'sec-revenue', renderRevenue(revenue)),
+          makeSection('', 'AIの判断理由', 'sec-executive', renderExecutive(executive)),
+          makeSection('', '各部署の動き', 'sec-departments', renderDepartments(departments)),
+          makeSection('', '実験', 'sec-experiments', renderExperiments(experiments)),
+          makeSection('', 'システム詳細', 'sec-system', renderSystem(system)),
+        ].join('');
+      } catch (err) {
+        document.getElementById('app').innerHTML = `<div class="card"><p style="color:var(--bad)">読み込みエラー: ${err.message}</p></div>`;
       }
     }
 
-    refresh();
-    setInterval(() => {
-      if (!document.hidden) {
-        refresh();
-      }
-    }, 60000);
+    loadAll();
+    setInterval(loadAll, 30000);
   </script>
 </body>
 </html>
