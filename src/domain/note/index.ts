@@ -32,7 +32,7 @@ export type NoteDraft = z.infer<typeof noteDraftSchema>;
 export const noteAuditSchema = z.object({
   id: z.string(),
   draftId: z.string(),
-  verdict: z.enum(["pass", "revise", "reject", "human_review"]),
+  verdict: z.enum(["pass", "revise", "reject"]),
   strongestSection: z.string().optional(),
   weakestSection: z.string().optional(),
   rewriteGuidance: z.string().optional(),

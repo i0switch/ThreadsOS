@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export interface TokenUsageEntry {
@@ -31,6 +31,6 @@ function getTodayLogFile(): string {
 export function logTokenUsage(entry: TokenUsageEntry): void {
   ensureTokenLogDir();
   const logFile = getTodayLogFile();
-  const line = JSON.stringify(entry) + "\n";
+  const line = `${JSON.stringify(entry)}\n`;
   writeFileSync(logFile, line, { flag: "a" });
 }

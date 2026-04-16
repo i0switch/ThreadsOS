@@ -12,11 +12,13 @@ import { db } from "../../db/index.js";
 import {
   humanInputs,
   improvementInsights,
+  noteDrafts,
   researchItems,
   threadPostDrafts,
   threadPostResults,
   topics,
 } from "../../db/schema.js";
+import type { DepartmentExperimentContext } from "../../domain/department/index.js";
 import type { NoteAudit, NoteDraft } from "../../domain/note/index.js";
 import type {
   ThreadPostAudit,
@@ -55,6 +57,7 @@ export interface OrchestrationService {
     storage: StorageClient,
     dryRun?: boolean,
     noteThemeContext?: string,
+    experimentContext?: DepartmentExperimentContext,
   ): Promise<string>;
   runPostPublishFollowup(
     api: ThreadsApiClient,
@@ -65,6 +68,7 @@ export interface OrchestrationService {
     llm: LlmClient,
     storage: StorageClient,
     dryRun?: boolean,
+    experimentContext?: DepartmentExperimentContext,
   ): Promise<string>;
   runWeeklyRetro(
     llm: LlmClient,
@@ -145,67 +149,6 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     }
 
     return { draft: currentDraft, audit };
-  }
-
-  // TODO: P1-A POC不合格 (2026-04-13, verdict 86.7%/90%) によりロールバック。
-  // 現状 未使用だがバッチ化の再設計ベースとして残置。再投入時は
-  // バッチサイズ3 + プロンプト強化 (各draft独立判定の明示) を検討。
-  private async settleThreadDraftsBatch(
-    drafts: ThreadPostDraft[],
-    llm: LlmClient,
-  ): Promise<Array<{ draft: ThreadPostDraft; audit: ThreadPostAudit }>> {
-    const completed = new Map<number, { draft: ThreadPostDraft; audit: ThreadPostAudit }>();
-    let queue = drafts.map((draft, index) => ({ index, draft }));
-
-    for (
-      let attempt = 0;
-      attempt <= MAX_THREAD_REVISION_ATTEMPTS && queue.length > 0;
-      attempt += 1
-    ) {
-      const auditMap = await this.postAuditService.auditDraftsBatch(
-        queue.map((item) => item.draft.id),
-        llm,
-      );
-      const nextQueue: Array<{ index: number; draft: ThreadPostDraft }> = [];
-
-      for (const item of queue) {
-        const audit = auditMap.get(item.draft.id);
-        if (!audit) {
-          throw new Error(`Batch audit result missing for draft: ${item.draft.id}`);
-        }
-
-        if (
-          audit.verdict !== "revise" ||
-          attempt >= MAX_THREAD_REVISION_ATTEMPTS
-        ) {
-          completed.set(item.index, { draft: item.draft, audit });
-          continue;
-        }
-
-        const feedback = this.buildThreadRevisionFeedback(audit);
-        if (!feedback) {
-          completed.set(item.index, { draft: item.draft, audit });
-          continue;
-        }
-
-        const regenerated = await this.postGenService.regenerateDraft(
-          item.draft.id,
-          feedback,
-          llm,
-        );
-        nextQueue.push({ index: item.index, draft: regenerated });
-      }
-
-      queue = nextQueue;
-    }
-
-    return drafts.map((_, index) => {
-      const settled = completed.get(index);
-      if (!settled) {
-        throw new Error(`Thread draft settlement incomplete at index ${index}`);
-      }
-      return settled;
-    });
   }
 
   private async settleNoteDraft(
@@ -337,9 +280,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     return selected;
   }
 
-  private async buildThreadsStrategyFromNoteThemes(
-    limit = 3,
-  ): Promise<string> {
+  private async buildThreadsStrategyFromNoteThemes(limit = 3): Promise<string> {
     const noteTopics = await this.selectNotePipelineTopics(limit);
     if (noteTopics.length === 0) {
       return "";
@@ -353,6 +294,65 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       ),
       "Threads投稿は上記テーマの記事化と収益化につながる導線を優先すること。",
     ].join("\n");
+  }
+
+  private buildExperimentGuidance(
+    experimentContext?: DepartmentExperimentContext,
+  ): string {
+    if (!experimentContext) {
+      return "";
+    }
+
+    return [
+      "## 今回のcanary実験",
+      `- bottleneck: ${experimentContext.bottleneck}`,
+      `- hypothesis: ${experimentContext.hypothesis}`,
+      `- guidance: ${experimentContext.guidance}`,
+      `- targetMetric: ${experimentContext.primaryMetric}`,
+    ].join("\n");
+  }
+
+  private applyThreadExperimentContext(
+    draftIds: string[],
+    experimentContext?: DepartmentExperimentContext,
+  ): void {
+    if (!experimentContext || draftIds.length === 0) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    for (const draftId of draftIds.slice(0, experimentContext.sampleSize)) {
+      db.update(threadPostDrafts)
+        .set({
+          campaignId: experimentContext.campaignId,
+          angleId: experimentContext.angleId ?? null,
+          ctaId: experimentContext.ctaId ?? null,
+          canaryGroup: experimentContext.canaryGroup,
+          updatedAt: now,
+        })
+        .where(eq(threadPostDrafts.id, draftId))
+        .run();
+    }
+  }
+
+  private applyNoteExperimentContext(
+    draftId: string,
+    experimentContext?: DepartmentExperimentContext,
+  ): void {
+    if (!experimentContext) {
+      return;
+    }
+
+    db.update(noteDrafts)
+      .set({
+        campaignId: experimentContext.campaignId,
+        angleId: experimentContext.angleId ?? null,
+        ctaId: experimentContext.ctaId ?? null,
+        canaryGroup: experimentContext.canaryGroup,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(noteDrafts.id, draftId))
+      .run();
   }
 
   async processHumanInputs(
@@ -489,7 +489,9 @@ export class OrchestrationServiceImpl implements OrchestrationService {
 
     for (const topic of selectedTopics) {
       if (dryRun) {
-        results.push(`[DRY-RUN] Would research Threads competitors for: ${topic.name}`);
+        results.push(
+          `[DRY-RUN] Would research Threads competitors for: ${topic.name}`,
+        );
         continue;
       }
 
@@ -618,6 +620,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     storage: StorageClient,
     dryRun = false,
     noteThemeContext?: string,
+    experimentContext?: DepartmentExperimentContext,
   ): Promise<string> {
     logger.info({ dryRun }, "Starting daily threads plan");
 
@@ -629,9 +632,13 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     const date = new Date().toISOString().split("T")[0];
 
     const insightsSummary = this.getImprovementInsightsSummary();
+    const experimentGuidance = this.buildExperimentGuidance(experimentContext);
+    const mergedInsightsSummary = [insightsSummary, experimentGuidance]
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .join("\n");
     const resolvedNoteThemeContext =
-      noteThemeContext ??
-      (await this.buildThreadsStrategyFromNoteThemes(3));
+      noteThemeContext ?? (await this.buildThreadsStrategyFromNoteThemes(3));
 
     for (const topic of topics) {
       if (dryRun) {
@@ -656,22 +663,32 @@ export class OrchestrationServiceImpl implements OrchestrationService {
         mergedSummary,
         5,
         llm,
-        insightsSummary,
+        mergedInsightsSummary,
         resolvedNoteThemeContext,
       );
       totalDrafts += drafts.length;
+      const canaryDraftIds: string[] = [];
 
       // P1-A POC不合格 (verdict 86.7% < 90%) によりバッチ版から単発版へロールバック
       // 不一致パターン: 単発=revise/medium → バッチ=pass/low (バッチが甘く判定)
       for (const draft of drafts) {
         const settled = await this.settleThreadDraft(draft, llm);
         if (settled.audit.verdict === "pass") passedDrafts++;
+        if (
+          experimentContext &&
+          settled.audit.verdict === "pass" &&
+          canaryDraftIds.length < experimentContext.sampleSize
+        ) {
+          canaryDraftIds.push(settled.draft.id);
+        }
 
         await storage.saveFile(
           `data/threads/drafts/${date}/${settled.draft.id}.md`,
           `# Draft: ${settled.draft.hookType}\n\n${settled.draft.body}\n\n---\nAudit: ${settled.audit.verdict} (${settled.audit.severity})`,
         );
       }
+
+      this.applyThreadExperimentContext(canaryDraftIds, experimentContext);
     }
 
     return `Generated ${totalDrafts} drafts, ${passedDrafts} passed audit. ${dryRun ? "(dry-run)" : ""}`;
@@ -716,6 +733,7 @@ export class OrchestrationServiceImpl implements OrchestrationService {
     llm: LlmClient,
     storage: StorageClient,
     dryRun = false,
+    experimentContext?: DepartmentExperimentContext,
   ): Promise<string> {
     logger.info({ dryRun }, "Starting nightly note pipeline");
 
@@ -727,6 +745,8 @@ export class OrchestrationServiceImpl implements OrchestrationService {
 
     const date = new Date().toISOString().split("T")[0];
     let notesGenerated = 0;
+    const experimentGuidance = this.buildExperimentGuidance(experimentContext);
+    let taggedCanary = false;
 
     for (const topic of topics) {
       const idea = await this.noteGenService.createIdea(
@@ -734,7 +754,13 @@ export class OrchestrationServiceImpl implements OrchestrationService {
         `${topic.niche}に関心のある読者`,
         topic.id,
       );
-      const retrievalContext = this.buildTaskContext(topic.name, "note");
+      const retrievalContext = [
+        this.buildTaskContext(topic.name, "note"),
+        experimentGuidance,
+      ]
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .join("\n");
 
       const titles = await this.noteGenService.generateTitleCandidates(
         idea.id,
@@ -758,6 +784,14 @@ export class OrchestrationServiceImpl implements OrchestrationService {
       notesGenerated++;
 
       const settled = await this.settleNoteDraft(draft, llm);
+      if (
+        experimentContext &&
+        !taggedCanary &&
+        settled.audit.verdict === "pass"
+      ) {
+        this.applyNoteExperimentContext(settled.draft.id, experimentContext);
+        taggedCanary = true;
+      }
       const checklist = await this.noteGenService.generateChecklist(
         settled.draft.id,
       );

@@ -3,6 +3,7 @@ import { desc, eq } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
+import { createRuntimeLedgerRepository } from "../../db/repositories/runtime-ledger.js";
 import {
   departmentRuns,
   executiveCycles,
@@ -21,11 +22,11 @@ import {
   type HeartbeatObjective,
   resolveDepartmentName,
 } from "../../domain/department/index.js";
+import { parseJsonObject } from "../../utils/llm-json.js";
 import type {
   ActionType,
   ScheduledAction,
 } from "../content-scheduler/index.js";
-import { parseJsonObject } from "../../utils/llm-json.js";
 
 export interface BrandPolicy {
   tone: "professional" | "casual" | "bold" | "educational";
@@ -97,7 +98,11 @@ export interface ErrorContext {
   pendingReviewCount: number;
   pendingProposalCount: number;
   consecutiveFailures: number;
-  pendingProposalSummaries?: Array<{ id: string; actionType: string; reason: string }>;
+  pendingProposalSummaries?: Array<{
+    id: string;
+    actionType: string;
+    reason: string;
+  }>;
 }
 
 export interface HeartbeatCyclePlan {
@@ -113,7 +118,10 @@ export interface HeartbeatCyclePlan {
   departmentInstructions?: Record<string, string>;
   contentGuidance?: ContentGuidance;
   policyUpdates?: Partial<StrategyPolicies>;
-  proposalDecisions?: Array<{ proposalId: string; decision: "approve" | "reject" | "escalate_to_human" }>;
+  proposalDecisions?: Array<{
+    proposalId: string;
+    decision: "approve" | "reject";
+  }>;
 }
 
 export interface ExecutiveService {
@@ -182,7 +190,9 @@ export class ExecutiveServiceImpl implements ExecutiveService {
       .get();
     if (existing) {
       try {
-        const state = JSON.parse(existing.stateJson) as Partial<StrategyStateSnapshot>;
+        const state = JSON.parse(
+          existing.stateJson,
+        ) as Partial<StrategyStateSnapshot>;
         if (state.policies) return state.policies;
       } catch {
         // parse failure, use defaults
@@ -206,9 +216,10 @@ export class ExecutiveServiceImpl implements ExecutiveService {
         objective,
         funnelStage,
         reasoning,
-        departmentInstructions: Object.keys(departmentInstructions).length > 0
-          ? JSON.stringify(departmentInstructions)
-          : null,
+        departmentInstructions:
+          Object.keys(departmentInstructions).length > 0
+            ? JSON.stringify(departmentInstructions)
+            : null,
         stateJson: JSON.stringify(strategy),
         createdAt: new Date().toISOString(),
       })
@@ -223,14 +234,21 @@ export class ExecutiveServiceImpl implements ExecutiveService {
     const reportSection = reports
       .map((r) => {
         const headline = (r.summary ?? "").slice(0, 100);
-        const metricsEntries = r.metrics && typeof r.metrics === "object"
-          ? Object.entries(r.metrics as Record<string, unknown>)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .slice(0, 3)
-          : [];
-        const keyMetrics = metricsEntries.length > 0
-          ? metricsEntries.map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`).join(", ")
-          : "なし";
+        const metricsEntries =
+          r.metrics && typeof r.metrics === "object"
+            ? Object.entries(r.metrics as Record<string, unknown>)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .slice(0, 3)
+            : [];
+        const keyMetrics =
+          metricsEntries.length > 0
+            ? metricsEntries
+                .map(
+                  ([k, v]) =>
+                    `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`,
+                )
+                .join(", ")
+            : "なし";
         const status = (r.recommendation ?? "").slice(0, 50);
         return `### ${r.department}部\n- headline: ${headline}\n- keyMetrics: ${keyMetrics}\n- status: ${status}`;
       })
@@ -250,9 +268,10 @@ export class ExecutiveServiceImpl implements ExecutiveService {
       .limit(3)
       .all();
 
-    const historySection = recentHistory.length > 0
-      ? `## 過去の戦略判断（直近${recentHistory.length}回）\n${recentHistory.map((h, i) => `${i + 1}. objective=${h.objective}, funnelStage=${h.funnelStage}, 理由: ${(h.reasoning ?? "").slice(0, 400)}`).join("\n")}\n\n中長期的な方向性の一貫性を考慮してください。頻繁な方針転換は避け、根拠がない限り前回の方針を継続してください。\n\n`
-      : "";
+    const historySection =
+      recentHistory.length > 0
+        ? `## 過去の戦略判断（直近${recentHistory.length}回）\n${recentHistory.map((h, i) => `${i + 1}. objective=${h.objective}, funnelStage=${h.funnelStage}, 理由: ${(h.reasoning ?? "").slice(0, 400)}`).join("\n")}\n\n中長期的な方向性の一貫性を考慮してください。頻繁な方針転換は避け、根拠がない限り前回の方針を継続してください。\n\n`
+        : "";
 
     return `あなたはThreadsOS運用の最高責任者（エグゼクティブ）です。
 各部署から上がってきた状況レポートと、実行候補アクションを見て、
@@ -263,7 +282,7 @@ export class ExecutiveServiceImpl implements ExecutiveService {
 - 部署の推奨を尊重しつつ、全体最適を考える
 - note実績ゼロならnote生成を最優先（ファネル構築）
 - 人間入力があれば最優先で処理
-- 1回のハートビートで最大3アクションまで
+- 1回のハートビートで1アクションのみ実行（§7: 1 heartbeat = 1 bottleneck改善）
 - 各部署のデータに基づいて根拠ある判断をする
 
 ## objectiveの選択肢
@@ -294,7 +313,7 @@ monetization: priceStrategy（premium/standard/value）、conversionFocus（dire
 {
   "objective": "directive_assimilation" | "funnel_expansion" | "engagement_compounding",
   "funnelStage": "bootstrap" | "distribution" | "conversion" | "optimization",
-  "approvedActionTypes": ["action_type_1", "action_type_2"],
+  "approvedActionTypes": ["single_action_type"],
   "reasoning": "判断理由を1-2文で",
   "departmentInstructions": {
     "department_name": "この部署への具体的指示"
@@ -311,28 +330,37 @@ monetization: priceStrategy（premium/standard/value）、conversionFocus（dire
     "monetization": { ... }
   },
   "proposalDecisions": [
-    { "proposalId": "uuid", "decision": "approve" | "reject" | "escalate_to_human" }
+    { "proposalId": "uuid", "decision": "approve" | "reject" }
   ]
-}` +
-    (errorContext ? this.buildErrorSection(errorContext) : "");
+}${errorContext ? this.buildErrorSection(errorContext) : ""}`;
   }
 
   private buildErrorSection(ctx: ErrorContext): string {
     const failureCount = ctx.recentFailures.length;
-    const failureDetails = failureCount > 0
-      ? ctx.recentFailures
-          .slice(0, 3)
-          .map(f => `  - ${f.jobName}: ${(f.error ?? "").slice(0, 120)} (${f.at})`)
-          .join("\n") + (failureCount > 3 ? `\n  ...他 ${failureCount - 3} 件` : "")
-      : "  なし";
+    const failureDetails =
+      failureCount > 0
+        ? ctx.recentFailures
+            .slice(0, 3)
+            .map(
+              (f) =>
+                `  - ${f.jobName}: ${(f.error ?? "").slice(0, 120)} (${f.at})`,
+            )
+            .join("\n") +
+          (failureCount > 3 ? `\n  ...他 ${failureCount - 3} 件` : "")
+        : "  なし";
 
     const proposalCount = ctx.pendingProposalSummaries?.length ?? 0;
-    const proposalDetails = proposalCount > 0
-      ? ctx.pendingProposalSummaries!
-          .slice(0, 3)
-          .map(p => `  - [${p.id}] ${p.actionType}: ${(p.reason ?? "").slice(0, 120)}`)
-          .join("\n") + (proposalCount > 3 ? `\n  ...他 ${proposalCount - 3} 件` : "")
-      : "  なし";
+    const proposalDetails =
+      proposalCount > 0
+        ? ctx.pendingProposalSummaries
+            ?.slice(0, 3)
+            .map(
+              (p) =>
+                `  - [${p.id}] ${p.actionType}: ${(p.reason ?? "").slice(0, 120)}`,
+            )
+            .join("\n") +
+          (proposalCount > 3 ? `\n  ...他 ${proposalCount - 3} 件` : "")
+        : "  なし";
 
     return `
 
@@ -352,8 +380,7 @@ ${proposalDetails}
 ## プロポーザル判断
 上記の未処理プロポーザルがある場合、proposalDecisionsフィールドで各プロポーザルに対して判断を返してください:
 - "approve": 安全と判断し承認
-- "reject": リスクがあるため却下
-- "escalate_to_human": 人間の判断が必要`;
+- "reject": リスクがあるため却下`;
   }
 
   private collectPriorityTopics(): string[] {
@@ -442,22 +469,41 @@ ${proposalDetails}
   private buildFallbackPlan(
     candidateActions: ScheduledAction[],
   ): HeartbeatCyclePlan {
+    // Spec §2 (絶対条件「迷ったら止める」) §20 (confidence 低 → 実行しない) に従い、
+    // LLM parse failure 時は何も実行しない。連続失敗時は anomalyEvents 経由で
+    // operations-mode が safe_freeze に昇格させる。
     const cycleId = randomUUID();
-    const limited = candidateActions.slice(0, 3);
     const fallbackReason =
-      "LLM response parse failed; fallback: up to 3 candidate actions approved";
-    const skipped = candidateActions.slice(3).map((a) => ({
+      "LLM response parse failed; safe-stop until next heartbeat (no actions executed)";
+    const skipped = candidateActions.map((a) => ({
       action: a,
       reason: fallbackReason,
     }));
+
+    try {
+      const ledger = createRuntimeLedgerRepository();
+      ledger.recordAnomaly({
+        category: "executive_parse_failure",
+        severity: "high",
+        message:
+          "Executive LLM parse failed; safe-stop applied. Connected anomalies feed operations-mode safe_freeze trigger.",
+        metadata: { candidateCount: candidateActions.length, cycleId },
+      });
+    } catch (anomalyErr) {
+      logger.warn(
+        { error: anomalyErr instanceof Error ? anomalyErr.message : String(anomalyErr) },
+        "Failed to record executive_parse_failure anomaly",
+      );
+    }
+
     return {
       cycleId,
       strategyKey: STRATEGY_STATE_KEY,
       objective: "funnel_expansion",
       funnelStage: "bootstrap",
-      approvedActions: limited,
+      approvedActions: [],
       skippedActions: skipped,
-      directives: this.buildDirectives(limited),
+      directives: [],
       strategy: {
         objective: "funnel_expansion",
         funnelStage: "bootstrap",
@@ -468,7 +514,7 @@ ${proposalDetails}
         pendingReplies: 0,
         latestNoteCount: 0,
         insightFocus: [],
-        activeActionTypes: limited.map((a) => a.type),
+        activeActionTypes: [],
         policies: this.loadCurrentPolicies(),
       },
       llmReasoning: fallbackReason,
@@ -482,7 +528,11 @@ ${proposalDetails}
     llm: LlmClient,
     errorContext?: ErrorContext,
   ): Promise<HeartbeatCyclePlan> {
-    const prompt = this.buildExecutivePrompt(reports, candidateActions, errorContext);
+    const prompt = this.buildExecutivePrompt(
+      reports,
+      candidateActions,
+      errorContext,
+    );
 
     const raw = await llm.generate(prompt, {
       label: "executive-heartbeat-cycle",
@@ -497,7 +547,7 @@ ${proposalDetails}
     if (!decision) {
       logger.warn(
         { raw },
-        "Executive LLM response parse failed, falling back to approving all candidates",
+        "Executive LLM response parse failed; safe-stop applied (no actions approved)",
       );
       const fallback = this.buildFallbackPlan(candidateActions);
       const fbNow = new Date().toISOString();
@@ -552,9 +602,9 @@ ${proposalDetails}
     const rawApproved = Array.isArray(decision.approvedActionTypes)
       ? (decision.approvedActionTypes as string[])
       : [];
-    const approvedActions = candidateActions.filter((a) =>
-      rawApproved.includes(a.type),
-    );
+    const approvedActions = candidateActions
+      .filter((a) => rawApproved.includes(a.type))
+      .slice(0, 1);
     const rawReasoning =
       typeof decision.reasoning === "string" ? decision.reasoning : "";
     const rawInstructions =
@@ -574,7 +624,9 @@ ${proposalDetails}
     const now = new Date().toISOString();
     const directives = this.buildDirectives(approvedActions);
 
-    const objective: HeartbeatObjective = isHeartbeatObjective(decision.objective)
+    const objective: HeartbeatObjective = isHeartbeatObjective(
+      decision.objective,
+    )
       ? decision.objective
       : "funnel_expansion";
     const funnelStage: FunnelStage = isFunnelStage(decision.funnelStage)
@@ -591,7 +643,10 @@ ${proposalDetails}
         : undefined;
     const mergedPolicies: StrategyPolicies = {
       brand: { ...existingPolicies.brand, ...(rawPolicyUpdates?.brand ?? {}) },
-      growth: { ...existingPolicies.growth, ...(rawPolicyUpdates?.growth ?? {}) },
+      growth: {
+        ...existingPolicies.growth,
+        ...(rawPolicyUpdates?.growth ?? {}),
+      },
       monetization: {
         ...existingPolicies.monetization,
         ...(rawPolicyUpdates?.monetization ?? {}),
@@ -600,8 +655,17 @@ ${proposalDetails}
 
     // ── プロポーザル判断の処理 ──
     const rawProposalDecisions = Array.isArray(decision.proposalDecisions)
-      ? (decision.proposalDecisions as Array<{ proposalId: string; decision: "approve" | "reject" | "escalate_to_human" }>)
-        .filter(d => d && typeof d.proposalId === "string" && typeof d.decision === "string")
+      ? (
+          decision.proposalDecisions as Array<{
+            proposalId: string;
+            decision: "approve" | "reject" | string;
+          }>
+        ).filter(
+          (d): d is { proposalId: string; decision: "approve" | "reject" } =>
+            d &&
+            typeof d.proposalId === "string" &&
+            (d.decision === "approve" || d.decision === "reject"),
+        )
       : [];
 
     // ── コンテンツガイダンスの処理 ──
@@ -699,7 +763,8 @@ ${proposalDetails}
       departmentInstructions: rawInstructions,
       contentGuidance: rawContentGuidance,
       policyUpdates: rawPolicyUpdates,
-      proposalDecisions: rawProposalDecisions.length > 0 ? rawProposalDecisions : undefined,
+      proposalDecisions:
+        rawProposalDecisions.length > 0 ? rawProposalDecisions : undefined,
     };
   }
 

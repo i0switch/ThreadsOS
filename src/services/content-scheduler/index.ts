@@ -646,7 +646,16 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       .select()
       .from(threadPostDrafts)
       .where(eq(threadPostDrafts.status, "audited"))
-      .all();
+      .all()
+      .sort((left, right) => {
+        const canaryDelta =
+          Number(right.canaryGroup === "canary") -
+          Number(left.canaryGroup === "canary");
+        if (canaryDelta !== 0) {
+          return canaryDelta;
+        }
+        return right.createdAt.localeCompare(left.createdAt);
+      });
 
     let inserted = 0;
     for (const draft of auditedDrafts) {
@@ -666,6 +675,10 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
           ).toISOString(),
           topicId: draft.topicId,
           draftId: draft.id,
+          campaignId: draft.campaignId,
+          angleId: draft.angleId,
+          ctaId: draft.ctaId,
+          canaryGroup: draft.canaryGroup,
           status: "pending",
           priority: topicPriority.get(draft.topicId) ?? 5,
           createdAt: now,
@@ -722,6 +735,15 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       .where(eq(noteDrafts.status, "audited"))
       .all()
       .filter((draft) => (draft.publishReadinessScore ?? 0) >= 6);
+    auditedDrafts.sort((left, right) => {
+      const canaryDelta =
+        Number(right.canaryGroup === "canary") -
+        Number(left.canaryGroup === "canary");
+      if (canaryDelta !== 0) {
+        return canaryDelta;
+      }
+      return right.updatedAt.localeCompare(left.updatedAt);
+    });
 
     // 既存slotのscheduled_atを取得して重複回避
     const existingSlotTimes = new Set(
@@ -761,6 +783,11 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
           scheduledAt,
           topicId: idea?.topicId ?? null,
           draftId: draft.id,
+          campaignId: draft.campaignId,
+          angleId: draft.angleId,
+          ctaId: draft.ctaId,
+          priceVariantId: draft.priceVariantId,
+          canaryGroup: draft.canaryGroup,
           status: "pending",
           priority: idea?.priority ?? 5,
           createdAt: now,

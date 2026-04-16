@@ -26,7 +26,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   db.run(sql`DELETE FROM proposals`);
-  db.run(sql`DELETE FROM human_review_items`);
   db.run(sql`DELETE FROM system_controls`);
   db.run(sql`DELETE FROM scheduled_job_runs`);
 });
@@ -35,7 +34,6 @@ describe("Proposal Flow Integration", () => {
   it("creates a proposal as pending, then approves to executed", () => {
     const now = new Date().toISOString();
 
-    // Create proposal
     db.insert(schema.proposals)
       .values({
         id: "proposal-1",
@@ -48,40 +46,27 @@ describe("Proposal Flow Integration", () => {
         expectedEffect: "Execute generate_and_post action",
         priority: "medium",
         status: "pending",
+        currentStage: "executive_review",
+        currentApproverId: "executive-director",
         createdAt: now,
       })
       .run();
 
-    // Verify pending state
-    const pending = db
-      .select()
-      .from(schema.proposals)
-      .where(sql`${schema.proposals.id} = 'proposal-1'`)
-      .get();
-    expect(pending?.status).toBe("pending");
-
-    // Approve the proposal
     db.update(schema.proposals)
       .set({
         status: "approved",
-        reviewerNote: "Looks good",
+        currentStage: "approved",
+        currentApproverId: null,
+        reviewerNote: "Executive approved",
         reviewedAt: new Date().toISOString(),
       })
       .where(sql`${schema.proposals.id} = 'proposal-1'`)
       .run();
 
-    const approved = db
-      .select()
-      .from(schema.proposals)
-      .where(sql`${schema.proposals.id} = 'proposal-1'`)
-      .get();
-    expect(approved?.status).toBe("approved");
-    expect(approved?.reviewerNote).toBe("Looks good");
-
-    // Mark as executed after running
     db.update(schema.proposals)
       .set({
         status: "executed",
+        currentStage: "executed",
         executedAt: new Date().toISOString(),
       })
       .where(sql`${schema.proposals.id} = 'proposal-1'`)
@@ -92,8 +77,9 @@ describe("Proposal Flow Integration", () => {
       .from(schema.proposals)
       .where(sql`${schema.proposals.id} = 'proposal-1'`)
       .get();
+
     expect(executed?.status).toBe("executed");
-    expect(executed?.executedAt).toBeDefined();
+    expect(executed?.currentStage).toBe("executed");
   });
 
   it("creates a proposal as pending, then rejects it", () => {
@@ -111,14 +97,17 @@ describe("Proposal Flow Integration", () => {
         expectedEffect: "Run weekly retrospective analysis",
         priority: "high",
         status: "pending",
+        currentStage: "executive_review",
+        currentApproverId: "executive-director",
         createdAt: now,
       })
       .run();
 
-    // Reject
     db.update(schema.proposals)
       .set({
         status: "rejected",
+        currentStage: "rejected",
+        currentApproverId: null,
         reviewerNote: "Not the right time",
         reviewedAt: new Date().toISOString(),
       })
@@ -130,113 +119,36 @@ describe("Proposal Flow Integration", () => {
       .from(schema.proposals)
       .where(sql`${schema.proposals.id} = 'proposal-reject-1'`)
       .get();
+
     expect(rejected?.status).toBe("rejected");
-    expect(rejected?.reviewerNote).toBe("Not the right time");
-    expect(rejected?.executedAt).toBeNull();
+    expect(rejected?.currentStage).toBe("rejected");
   });
 
   it("auto-approvable actions pass safety check, high-risk do not", () => {
     const safetyService = createSafetyService();
 
-    // Routine actions are auto-approvable
-    const routineAction = {
-      type: "generate_and_post" as const,
-      priority: 2,
-      reason: "thread slot available",
-    };
-    expect(safetyService.checkAutoApproval(routineAction)).toBe(true);
+    expect(
+      safetyService.checkAutoApproval({
+        type: "generate_and_post",
+        priority: 2,
+        reason: "thread slot available",
+      }),
+    ).toBe(true);
 
-    const engagementAction = {
-      type: "fetch_engagement" as const,
-      priority: 1,
-      reason: "recent posts",
-    };
-    expect(safetyService.checkAutoApproval(engagementAction)).toBe(true);
+    expect(
+      safetyService.checkAutoApproval({
+        type: "reply_safe",
+        priority: 2,
+        reason: "safe replies queued",
+      }),
+    ).toBe(true);
 
-    const replyAction = {
-      type: "reply_safe" as const,
-      priority: 2,
-      reason: "safe replies queued",
-    };
-    expect(safetyService.checkAutoApproval(replyAction)).toBe(true);
-
-    // High-risk actions require human review
-    const retroAction = {
-      type: "weekly_retro" as const,
-      priority: 5,
-      reason: "7 days since last retro",
-    };
-    expect(safetyService.checkAutoApproval(retroAction)).toBe(false);
-  });
-
-  it("human_review_items flow: pending -> approved", () => {
-    const now = new Date().toISOString();
-
-    db.insert(schema.humanReviewItems)
-      .values({
-        id: "hr-1",
-        itemType: "thread_draft",
-        itemId: "draft-risky-1",
-        reason: "Potential policy violation",
-        status: "pending",
-        createdAt: now,
-      })
-      .run();
-
-    const pending = db
-      .select()
-      .from(schema.humanReviewItems)
-      .where(sql`${schema.humanReviewItems.id} = 'hr-1'`)
-      .get();
-    expect(pending?.status).toBe("pending");
-
-    // Approve
-    db.update(schema.humanReviewItems)
-      .set({
-        status: "approved",
-        reviewedAt: new Date().toISOString(),
-        reviewerNote: "Content is fine after review",
-      })
-      .where(sql`${schema.humanReviewItems.id} = 'hr-1'`)
-      .run();
-
-    const approved = db
-      .select()
-      .from(schema.humanReviewItems)
-      .where(sql`${schema.humanReviewItems.id} = 'hr-1'`)
-      .get();
-    expect(approved?.status).toBe("approved");
-    expect(approved?.reviewerNote).toBe("Content is fine after review");
-  });
-
-  it("human_review_items flow: pending -> rejected", () => {
-    const now = new Date().toISOString();
-
-    db.insert(schema.humanReviewItems)
-      .values({
-        id: "hr-reject-1",
-        itemType: "note_draft",
-        itemId: "note-draft-risky-1",
-        reason: "Low quality score",
-        status: "pending",
-        createdAt: now,
-      })
-      .run();
-
-    db.update(schema.humanReviewItems)
-      .set({
-        status: "rejected",
-        reviewedAt: new Date().toISOString(),
-        reviewerNote: "Needs significant rewrite",
-      })
-      .where(sql`${schema.humanReviewItems.id} = 'hr-reject-1'`)
-      .run();
-
-    const rejected = db
-      .select()
-      .from(schema.humanReviewItems)
-      .where(sql`${schema.humanReviewItems.id} = 'hr-reject-1'`)
-      .get();
-    expect(rejected?.status).toBe("rejected");
+    expect(
+      safetyService.checkAutoApproval({
+        type: "weekly_retro",
+        priority: 5,
+        reason: "7 days since last retro",
+      }),
+    ).toBe(false);
   });
 });

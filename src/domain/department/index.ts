@@ -23,6 +23,22 @@ export type FunnelStage =
   | "conversion"
   | "optimization";
 
+export type FunnelBottleneck = "Reach" | "Click" | "Read" | "Buy";
+
+export interface DepartmentExperimentContext {
+  experimentId: string;
+  bottleneck: FunnelBottleneck;
+  actionType: ActionType;
+  campaignId: string;
+  canaryGroup: string;
+  sampleSize: number;
+  primaryMetric: string;
+  guidance: string;
+  hypothesis: string;
+  angleId?: string;
+  ctaId?: string;
+}
+
 export interface DepartmentDirective {
   department: DepartmentName;
   goal: string;
@@ -34,6 +50,7 @@ export interface DepartmentExecutionContext {
   dryRun: boolean;
   /** Executiveから部署への具体的指示（あれば） */
   instruction?: string;
+  experimentContext?: DepartmentExperimentContext;
 }
 
 export interface DepartmentExecutionResult {

@@ -29,14 +29,25 @@ describe("Database", () => {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      CREATE TABLE human_review_items (
+      CREATE TABLE proposals (
         id TEXT PRIMARY KEY,
-        item_type TEXT NOT NULL,
-        item_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        leader_agent_id TEXT,
+        executive_agent_id TEXT,
+        department TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
         reason TEXT NOT NULL,
+        evidence TEXT NOT NULL,
+        expected_effect TEXT NOT NULL,
+        risk TEXT,
+        priority TEXT NOT NULL DEFAULT 'medium',
         status TEXT NOT NULL DEFAULT 'pending',
-        reviewed_at TEXT,
+        current_stage TEXT NOT NULL DEFAULT 'executive_review',
+        current_approver_id TEXT,
         reviewer_note TEXT,
+        reviewed_at TEXT,
+        executed_at TEXT,
         created_at TEXT NOT NULL
       );
     `);
@@ -48,7 +59,7 @@ describe("Database", () => {
     const tableNames = tables.map((t) => t.name);
     expect(tableNames).toContain("topics");
     expect(tableNames).toContain("thread_post_drafts");
-    expect(tableNames).toContain("human_review_items");
+    expect(tableNames).toContain("proposals");
   });
 
   it("should export all schema tables", () => {
@@ -62,11 +73,11 @@ describe("Database", () => {
     expect(schema.noteIdeas).toBeDefined();
     expect(schema.noteDrafts).toBeDefined();
     expect(schema.noteAudits).toBeDefined();
+    expect(schema.sessionHealth).toBeDefined();
     expect(schema.competitorSnapshots).toBeDefined();
     expect(schema.scheduledJobRuns).toBeDefined();
     expect(schema.strategyStates).toBeDefined();
     expect(schema.executiveCycles).toBeDefined();
     expect(schema.departmentRuns).toBeDefined();
-    expect(schema.humanReviewItems).toBeDefined();
   });
 });

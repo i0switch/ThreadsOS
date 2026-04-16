@@ -3,7 +3,10 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { loadEnv } from "../config/env.js";
+import { assertContractStoreHealthy } from "../services/contracts/index.js";
 import * as schema from "./schema.js";
+
+assertContractStoreHealthy();
 
 const env = loadEnv();
 

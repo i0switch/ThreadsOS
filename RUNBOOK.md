@@ -6,6 +6,8 @@
 
 ThreadsOS の中核はハートビートジョブ。1 時間ごとに差分収集 → 戦略判断 → 部署実行を行う。
 
+補助 cadence として 15 分 tier では `metrics-sync` が実行され、note session guard と note / Threads の metrics snapshot を更新する。
+
 #### 手動実行
 
 ```bash
@@ -47,35 +49,11 @@ pnpm dev
 ```
 
 ダッシュボードで確認できること:
-- **Summary**: Threads/note の直近 24h/7d パフォーマンス
-- **Departments**: 各部署の実行状況・最新サイクル
-- **Agents**: ハートビート状態・ロック状況
-- **Proposals**: 提案一覧と承認/却下
-- **Reviews**: 人間レビュー待ちアイテム
-- **Logs**: ジョブ実行履歴 (ページネーション対応)
-- **KPI**: チャネル別 KPI スナップショット
-- **Control**: システム一時停止/再開・ディレクティブ投入
-
-### 人間レビュー対応
-
-高リスク提案や `weekly_retro` など自動承認されないアクションは人間レビューが必要。
-
-#### CLI で対応
-
-```bash
-# レビュー待ち一覧
-pnpm review:list
-
-# 承認 (ID を指定)
-pnpm review:approve <review-id>
-
-# 却下 (ID を指定)
-pnpm review:reject <review-id>
-```
-
-#### ダッシュボードで対応
-
-`/dashboard` の Reviews セクションから承認/却下ボタンで操作。
+- **Current State**: operations mode と現在の bottleneck
+- **Runtime Health**: runner / session / outbox の状態
+- **Execution Ledger**: anomaly / decision evidence / rollback の履歴
+- **Auditor**: pass / rewrite / skip / quarantine の集計
+- **Contracts**: agents / playbooks / policies のコンパイル結果
 
 ### 個別ジョブの手動実行
 
@@ -85,6 +63,7 @@ pnpm review:reject <review-id>
 pnpm job:daily-topic-research    # トピックリサーチ
 pnpm job:daily-threads-plan      # Threads 投稿計画
 pnpm job:post-publish-followup   # エンゲージメント取得
+pnpm job:metrics-sync            # metrics同期 + note session guard
 pnpm job:nightly-note-pipeline   # note 記事パイプライン
 pnpm job:weekly-retro            # 週次振り返り
 ```

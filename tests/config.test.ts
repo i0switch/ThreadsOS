@@ -15,6 +15,16 @@ describe("loadEnv", () => {
     delete process.env.LLM_HEARTBEAT_MODEL_FAST;
     delete process.env.LLM_HEARTBEAT_MODEL_STANDARD;
     delete process.env.LLM_HEARTBEAT_MODEL_PREMIUM;
+    delete process.env.LLM_CODEX_MODEL_FAST;
+    delete process.env.LLM_CODEX_MODEL_STANDARD;
+    delete process.env.LLM_CODEX_MODEL_PREMIUM;
+    delete process.env.LLM_COPILOT_MODEL_FAST;
+    delete process.env.LLM_COPILOT_MODEL_STANDARD;
+    delete process.env.LLM_COPILOT_MODEL_PREMIUM;
+    delete process.env.LLM_RUNNER_TIMEOUT_MS;
+    delete process.env.LLM_RUNNER_DAILY_TOKENS_LIMIT;
+    delete process.env.LLM_RUNNER_DAILY_CALLS_LIMIT;
+    delete process.env.LLM_RUNNER_CIRCUIT_FAILURE_THRESHOLD;
   });
 
   it("should return default values when no env vars set", () => {
@@ -29,6 +39,12 @@ describe("loadEnv", () => {
     expect(env.LLM_DEFAULT_TIER).toBe("standard");
     expect(env.LLM_DIRECT_MODEL_STANDARD).toBe("claude-sonnet-4-20250514");
     expect(env.LLM_HEARTBEAT_MODEL_STANDARD).toBe("sonnet");
+    expect(env.LLM_CODEX_MODEL_STANDARD).toBe("gpt-5.4");
+    expect(env.LLM_COPILOT_MODEL_STANDARD).toBe("gpt-5.4");
+    expect(env.LLM_RUNNER_TIMEOUT_MS).toBe(8 * 60 * 1000);
+    expect(env.LLM_RUNNER_DAILY_TOKENS_LIMIT).toBe(200000);
+    expect(env.LLM_RUNNER_DAILY_CALLS_LIMIT).toBe(200);
+    expect(env.LLM_RUNNER_CIRCUIT_FAILURE_THRESHOLD).toBe(3);
   });
 
   it("should keep in-memory database urls unchanged", () => {
@@ -61,12 +77,18 @@ describe("loadEnv", () => {
     process.env.LLM_DEFAULT_TIER = "premium";
     process.env.LLM_DIRECT_MODEL_PREMIUM = "custom-direct-premium";
     process.env.LLM_HEARTBEAT_MODEL_PREMIUM = "custom-heartbeat-premium";
+    process.env.LLM_CODEX_MODEL_PREMIUM = "custom-codex-premium";
+    process.env.LLM_COPILOT_MODEL_PREMIUM = "custom-copilot-premium";
+    process.env.LLM_RUNNER_TIMEOUT_MS = "12345";
 
     const env = loadEnv();
 
     expect(env.LLM_DEFAULT_TIER).toBe("premium");
     expect(env.LLM_DIRECT_MODEL_PREMIUM).toBe("custom-direct-premium");
     expect(env.LLM_HEARTBEAT_MODEL_PREMIUM).toBe("custom-heartbeat-premium");
+    expect(env.LLM_CODEX_MODEL_PREMIUM).toBe("custom-codex-premium");
+    expect(env.LLM_COPILOT_MODEL_PREMIUM).toBe("custom-copilot-premium");
+    expect(env.LLM_RUNNER_TIMEOUT_MS).toBe(12345);
   });
 
   it("should accept valid NODE_ENV values", () => {

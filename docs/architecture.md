@@ -23,7 +23,7 @@ Threads 公式APIで投稿・分析を自動化し、note は調査・ドラフ�
 │  note-audit / orchestration                          │
 ├─────────────────────────────────────────────────────┤
 │                   Domain Layer                       │
-│  threads/ note/ analytics/ review/                   │
+│  threads/ note/ analytics/ review/ proposal-flow     │
 │  (entities, value objects, enums, zod schemas)        │
 ├─────────────────────────────────────────────────────┤
 │                  Adapters Layer                       │
@@ -47,7 +47,7 @@ Threads 公式APIで投稿・分析を自動化し、note は調査・ドラフ�
 │  │  ├─ threads/             # Threads 関連エンティティ
 │  │  ├─ note/                # note 関連エンティティ
 │  │  ├─ analytics/           # 分析データモデル
-│  │  └─ review/              # human review エンティティ
+│  │  └─ review/              # reply decision / proposal flow 関連エンティティ
 │  ├─ adapters/               # 外部システム接続
 │  │  ├─ threads-api/         # Threads Graph API クライアント
 │  │  ├─ note-research/       # note 公開ページ取得 (research_only)
@@ -111,14 +111,14 @@ Threads 公式APIで投稿・分析を自動化し、note は調査・ドラフ�
 | ThreadPostAudit | threads | 投稿監査結果 |
 | ThreadPostResult | threads | 投稿後の結果データ |
 | ThreadReply | threads | 受信した返信 |
-| ReplyDecision | review | 返信への対応判定 (safe_auto_reply / human_review / ignore) |
+| ReplyDecision | review | 返信への対応判定 (safe_auto_reply / quarantine / ignore) |
 | ImprovementInsight | analytics | 改善提案 |
 | NoteIdea | note | note ネタ候補 |
 | NoteDraft | note | note 下書き |
 | NoteAudit | note | note 監査結果 |
 | CompetitorSnapshot | analytics | 競合スナップショット |
 | ScheduledJobRun | app | ジョブ実行記録 |
-| HumanReviewItem | review | 人間レビュー待ちアイテム |
+| Proposal | review | 承認フローに乗る提案 |
 
 ## Data Flow
 
@@ -147,7 +147,7 @@ Threads 公式APIで投稿・分析を自動化し、note は調査・ドラフ�
 1. **Idea Generation**: Threads の勝ちテーマ → note ネタ候補
 2. **Draft Generation**: アウトライン → 本文ドラフト
 3. **Audit**: 監査 → publish readiness スコア
-4. **Review Queue**: human_review → 手動公開
+4. **Proposal Flow**: proposal 作成 → executive review → 実行
 
 ### note 3モード
 | モード | 説明 | 自動化範囲 |
@@ -190,7 +190,7 @@ Threads 公式APIで投稿・分析を自動化し、note は調査・ドラフ�
 ### 冪等性と安全性
 - すべてのジョブは再実行可能
 - すべての外部書き込みは audit log を残す
-- 危険操作は human review 経由
+- 危険操作は proposals / operations mode / observation で制御
 - dry-run モードを全ジョブに実装
 
 ### Human Review フロー
@@ -211,9 +211,6 @@ Threads 公式APIで投稿・分析を自動化し、note は調査・ドラフ�
 | `pnpm job:daily-topic-research` | トピック調査ジョブ |
 | `pnpm job:daily-threads-plan` | Threads計画ジョブ |
 | `pnpm job:nightly-note-pipeline` | note パイプラインジョブ |
-| `pnpm review:list` | レビュー待ち一覧 |
-| `pnpm review:approve` | レビュー承認 |
-| `pnpm review:reject` | レビュー却下 |
 
 ## Security Boundaries
 

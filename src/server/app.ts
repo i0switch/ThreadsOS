@@ -44,7 +44,16 @@ export async function buildServer(options: BuildServerOptions = {}) {
       return;
     }
 
+    // Local access (127.0.0.1 / ::1) does not require auth token
+    const isLocal = request.ip === "127.0.0.1" || request.ip === "::1";
+    if (isLocal && !dashboardToken) {
+      return;
+    }
+
     if (!dashboardToken) {
+      reply.code(503).send({
+        error: "dashboard authentication token is not configured",
+      });
       return;
     }
 
@@ -56,7 +65,11 @@ export async function buildServer(options: BuildServerOptions = {}) {
         ? request.headers["x-dashboard-token"]
         : null;
 
-    if (bearerToken === dashboardToken || headerToken === dashboardToken) {
+    if (
+      isLocal ||
+      bearerToken === dashboardToken ||
+      headerToken === dashboardToken
+    ) {
       return;
     }
 

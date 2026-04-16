@@ -31,7 +31,7 @@ function bootstrapTables() {
       risk TEXT,
       priority TEXT NOT NULL DEFAULT 'medium',
       status TEXT NOT NULL DEFAULT 'pending',
-      current_stage TEXT NOT NULL DEFAULT 'human_review',
+      current_stage TEXT NOT NULL DEFAULT 'executive_review',
       current_approver_id TEXT,
       reviewer_note TEXT,
       reviewed_at TEXT,
@@ -58,7 +58,7 @@ describe("ProposalFlowService", () => {
     sqlite.exec("DELETE FROM proposal_events; DELETE FROM proposals;");
   });
 
-  it("creates hierarchical proposal history and moves to approved", () => {
+  it("creates hierarchical proposal history and moves to approved via executive review", () => {
     const service = createProposalFlowService();
     const proposalId = service.createHierarchicalProposal({
       agentId: "threads-post-generator",
@@ -73,7 +73,7 @@ describe("ProposalFlowService", () => {
       priority: "high",
     });
 
-    service.approveProposal(proposalId, "dashboard-human", "実行してよい");
+    service.approveProposal(proposalId, "executive-director", "実行してよい");
 
     const proposal = db
       .select()
@@ -89,6 +89,7 @@ describe("ProposalFlowService", () => {
     expect(proposal?.status).toBe("approved");
     expect(proposal?.currentStage).toBe("approved");
     expect(history).toHaveLength(4);
+    expect(history.at(-1)?.stage).toBe("executive_review");
     expect(history.at(-1)?.action).toBe("approved");
   });
 });

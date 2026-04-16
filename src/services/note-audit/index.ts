@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
-import { humanReviewItems, noteAudits, noteDrafts } from "../../db/schema.js";
+import { createRuntimeLedgerRepository } from "../../db/repositories/runtime-ledger.js";
+import { noteAudits, noteDrafts } from "../../db/schema.js";
 import type { NoteAudit } from "../../domain/note/index.js";
 import { parseJsonObject } from "../../utils/llm-json.js";
+import { normalizeAuditorAction } from "../auditor/index.js";
 
 const NOTE_AUDIT_CRITERIA = [
   "タイトルが弱い",
@@ -22,15 +24,6 @@ const NOTE_AUDIT_CRITERIA = [
   "ブランド口調からズレてる",
 ];
 
-function buildReviewReason(
-  score: number,
-  weakestSection: string,
-  guidance: string,
-): string {
-  const hints = [weakestSection, guidance].filter(Boolean).join(" / ");
-  return `Score: ${score}/10. ${hints || "要再監査"}`;
-}
-
 export interface NoteAuditService {
   auditDraft(draftId: string, llm: LlmClient): Promise<NoteAudit>;
   getAudit(auditId: string): Promise<NoteAudit | null>;
@@ -38,6 +31,8 @@ export interface NoteAuditService {
 }
 
 export class NoteAuditServiceImpl implements NoteAuditService {
+  private ledger = createRuntimeLedgerRepository();
+
   async auditDraft(draftId: string, llm: LlmClient): Promise<NoteAudit> {
     const draft = db
       .select()
@@ -64,7 +59,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
 
 ## 回答形式 (JSONのみ)
 {
-  "verdict": "pass" | "revise" | "reject" | "human_review",
+  "verdict": "pass" | "revise" | "reject",
   "strongestSection": "最も強いセクション",
   "weakestSection": "最も弱いセクション",
   "rewriteGuidance": "具体的な改善指示",
@@ -91,7 +86,7 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       rewriteGuidance: string;
       score: number;
     }>(raw) ?? {
-      // Fix-2 (2026-04-14): パース失敗は revise で自動リトライに (human_reviewに降らない)
+      // Fix-2 (2026-04-14): パース失敗は revise で自動リトライに
       verdict: "revise",
       strongestSection: "",
       weakestSection: "",
@@ -123,18 +118,10 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
       .where(eq(noteAudits.draftId, draftId))
       .get();
     const id = existingAudit?.id ?? randomUUID();
-    const needsReview =
-      parsed.verdict === "human_review" || normalizedScore <= 2;
-    const existingReviewItem = db
-      .select()
-      .from(humanReviewItems)
-      .where(
-        and(
-          eq(humanReviewItems.itemType, "note_draft"),
-          eq(humanReviewItems.itemId, draftId),
-        ),
-      )
-      .get();
+    const auditorAction = normalizeAuditorAction({
+      verdict: parsed.verdict,
+      score: normalizedScore,
+    });
 
     if (existingAudit) {
       db.update(noteAudits)
@@ -166,64 +153,55 @@ ${NOTE_AUDIT_CRITERIA.map((c, i) => `${i + 1}. ${c}`).join("\n")}
     db.update(noteDrafts)
       .set({
         status:
-          parsed.verdict === "pass"
+          auditorAction === "pass"
             ? "audited"
-            : parsed.verdict === "reject"
+            : auditorAction === "skip"
               ? "rejected"
-              : normalizedScore >= 6
-                ? "audited"
-                : "draft",
+              : "draft",
         publishReadinessScore: normalizedScore,
         updatedAt: now,
       })
       .where(eq(noteDrafts.id, draftId))
       .run();
 
-    if (needsReview) {
-      const reviewReason = buildReviewReason(
-        normalizedScore,
-        parsed.weakestSection,
-        parsed.rewriteGuidance,
-      );
-      if (existingReviewItem) {
-        db.update(humanReviewItems)
-          .set({
-            reason: reviewReason,
-            status: "pending",
-            reviewedAt: null,
-            reviewerNote: null,
-          })
-          .where(eq(humanReviewItems.id, existingReviewItem.id))
-          .run();
-      } else {
-        db.insert(humanReviewItems)
-          .values({
-            id: randomUUID(),
-            itemType: "note_draft",
-            itemId: draftId,
-            reason: reviewReason,
-            status: "pending",
-            createdAt: now,
-          })
-          .run();
-      }
+    this.ledger.recordDecisionEvidence({
+      entityType: "note_draft",
+      entityId: draftId,
+      decisionType: `auditor_${auditorAction}`,
+      evidence: {
+        verdict: parsed.verdict,
+        strongestSection: parsed.strongestSection,
+        weakestSection: parsed.weakestSection,
+        rewriteGuidance: parsed.rewriteGuidance,
+        score: normalizedScore,
+      },
+    });
+
+    if (auditorAction === "quarantine") {
+      this.ledger.recordAnomaly({
+        category: "auditor_quarantine",
+        severity: "high",
+        message: `Note draft ${draftId} quarantined by auditor`,
+        metadata: {
+          draftId,
+          score: normalizedScore,
+          weakestSection: parsed.weakestSection,
+          rewriteGuidance: parsed.rewriteGuidance,
+        },
+      });
       logger.warn(
         { draftId, score: normalizedScore },
-        "Note draft sent to human review",
+        "Note draft quarantined by auditor",
       );
-    } else if (existingReviewItem && existingReviewItem.status === "pending") {
-      db.update(humanReviewItems)
-        .set({
-          status: "approved",
-          reviewedAt: now,
-          reviewerNote: "Auto-cleared after re-audit",
-        })
-        .where(eq(humanReviewItems.id, existingReviewItem.id))
-        .run();
     }
 
     logger.info(
-      { draftId, verdict: parsed.verdict, score: normalizedScore },
+      {
+        draftId,
+        verdict: parsed.verdict,
+        score: normalizedScore,
+        auditorAction,
+      },
       "Note draft audited",
     );
 

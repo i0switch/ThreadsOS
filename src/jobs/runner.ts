@@ -3,6 +3,7 @@ import { and, eq, lt } from "drizzle-orm";
 import { logger } from "../app/logger.js";
 import { ensureAutonomyTables } from "../db/bootstrap.js";
 import { db } from "../db/index.js";
+import { createRuntimeLedgerRepository } from "../db/repositories/runtime-ledger.js";
 import { scheduledJobRuns } from "../db/schema.js";
 
 export interface JobOptions {
@@ -23,10 +24,15 @@ export async function runJob(
   execute: (ctx: { dryRun: boolean; logger: typeof logger }) => Promise<string>,
 ): Promise<void> {
   ensureAutonomyTables();
+  const ledger = createRuntimeLedgerRepository();
 
   const { name, dryRun = false, stuckThresholdMinutes = 60 } = options;
   const runId = randomUUID();
   const jobLogger = logger.child({ job: name, runId, dryRun });
+  const leaseKey = `job:${name}`;
+  const expiresAt = new Date(
+    Date.now() + stuckThresholdMinutes * 60 * 1000,
+  ).toISOString();
 
   // Stuck running cleanup
   const stuckThreshold = new Date(
@@ -59,7 +65,28 @@ export async function runJob(
 
   const startedAt = new Date().toISOString();
 
+  const leaseAcquired = ledger.acquireJobLease({
+    leaseKey,
+    ownerId: runId,
+    heartbeatScope: name,
+    expiresAt,
+  });
+
+  if (!leaseAcquired) {
+    jobLogger.warn("Job lease already acquired, skipping");
+    return;
+  }
+
   try {
+    ledger.insertJobRun({
+      id: runId,
+      jobName: name,
+      leaseKey,
+      ownerId: runId,
+      status: "running",
+      startedAt,
+      dryRun,
+    });
     db.insert(scheduledJobRuns)
       .values({
         id: runId,
@@ -89,6 +116,11 @@ export async function runJob(
       })
       .where(eq(scheduledJobRuns.id, runId))
       .run();
+    ledger.updateJobRun(runId, {
+      status: "completed",
+      finishedAt: new Date().toISOString(),
+      resultSummary: summary,
+    });
 
     jobLogger.info({ summary }, "Job completed");
   } catch (error) {
@@ -102,8 +134,15 @@ export async function runJob(
       })
       .where(eq(scheduledJobRuns.id, runId))
       .run();
+    ledger.updateJobRun(runId, {
+      status: "failed",
+      finishedAt: new Date().toISOString(),
+      resultSummary: message,
+    });
 
     jobLogger.error({ error: message }, "Job failed");
     throw error;
+  } finally {
+    ledger.releaseJobLease(leaseKey, runId);
   }
 }

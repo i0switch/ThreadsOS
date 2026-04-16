@@ -1,9 +1,9 @@
 ﻿import { randomUUID } from "node:crypto";
+import { and, desc, eq, isNull, lte } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import type { NoteApiClient } from "../../adapters/note-api/index.js";
 import type { StorageClient } from "../../adapters/storage/index.js";
 import type { ThreadsApiClient } from "../../adapters/threads-api/index.js";
-import { and, desc, eq, isNull, lte } from "drizzle-orm";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import {
@@ -25,6 +25,7 @@ import {
 import type {
   DepartmentExecutionResult,
   DepartmentExecutor,
+  DepartmentExperimentContext,
   DepartmentName,
   DepartmentReport,
 } from "../../domain/department/index.js";
@@ -146,7 +147,9 @@ export class DepartmentExecutionServiceImpl {
     return last?.createdAt ?? null;
   }
 
-  private getLatestDepartmentSummary(department: DepartmentName): string | null {
+  private getLatestDepartmentSummary(
+    department: DepartmentName,
+  ): string | null {
     const row = db
       .select()
       .from(departmentSummaries)
@@ -187,6 +190,7 @@ export class DepartmentExecutionServiceImpl {
   async execute(
     action: ScheduledAction,
     instruction?: string,
+    experimentContext?: DepartmentExperimentContext,
   ): Promise<DepartmentExecutionResult> {
     const executor = this.executors.find((candidate) =>
       candidate.supports(action.type),
@@ -195,7 +199,12 @@ export class DepartmentExecutionServiceImpl {
       throw new Error(`No department executor registered for ${action.type}`);
     }
 
-    return executor.execute({ action, dryRun: this.deps.dryRun, instruction });
+    return executor.execute({
+      action,
+      dryRun: this.deps.dryRun,
+      instruction,
+      experimentContext,
+    });
   }
 
   private createCommandExecutor(): DepartmentExecutor {
@@ -228,7 +237,7 @@ export class DepartmentExecutionServiceImpl {
               ? "process_human_inputs を実行すべき"
               : commandNotifications
                 ? "他部署通知を踏まえて全体判断を更新すべき"
-              : "動く必要なし",
+                : "動く必要なし",
           lastExecutedAt: this.getLastRun("command"),
         };
       },
@@ -278,9 +287,8 @@ export class DepartmentExecutionServiceImpl {
           .from(topics)
           .where(eq(topics.status, "active"))
           .all().length;
-        const researchCurrentState = this.getLatestDepartmentSummary(
-          "external-research",
-        );
+        const researchCurrentState =
+          this.getLatestDepartmentSummary("external-research");
         const researchLiveSummary =
           hoursSince > 24
             ? `最終リサーチから${Math.floor(hoursSince)}時間経過。更新推奨`
@@ -294,8 +302,7 @@ export class DepartmentExecutionServiceImpl {
             hoursSinceLastResearch: Math.floor(hoursSince),
             activeTopics,
           },
-          recommendation:
-            hoursSince > 24 ? "リサーチ更新推奨" : "動く必要なし",
+          recommendation: hoursSince > 24 ? "リサーチ更新推奨" : "動く必要なし",
           lastExecutedAt: lastResearch?.createdAt ?? null,
         };
       },
@@ -328,7 +335,9 @@ export class DepartmentExecutionServiceImpl {
     return {
       department: "competitive-analysis",
       supports: (actionType) =>
-        ["analyze_competitors", "fetch_competitor_updates"].includes(actionType),
+        ["analyze_competitors", "fetch_competitor_updates"].includes(
+          actionType,
+        ),
       report: (): DepartmentReport => {
         const snapshots = db
           .select()
@@ -358,7 +367,9 @@ export class DepartmentExecutionServiceImpl {
         const currentState = this.getLatestDepartmentSummary(
           "competitive-analysis",
         );
-        const caNotifications = this.getUnreadNotifications("competitive-analysis");
+        const caNotifications = this.getUnreadNotifications(
+          "competitive-analysis",
+        );
         const liveSummary = latestSnapshot
           ? `競合スナップショット: ${snapshots.length}件（最新${daysSinceSnapshot}日前）、分析: ${latestAnalysis ? `最新${daysSinceAnalysis}日前` : "未実行"}${caNotifications}`
           : `競合スナップショット未取得。比較材料の蓄積が必要${caNotifications}`;
@@ -441,7 +452,12 @@ export class DepartmentExecutionServiceImpl {
               return `競合スナップショット差分チェック完了: 最新スナップショット${snapshotAge}時間前、各部署へ通知済み`;
             },
           );
-          return createResult(action, summary, undefined, "competitive-analysis");
+          return createResult(
+            action,
+            summary,
+            undefined,
+            "competitive-analysis",
+          );
         }
 
         // フル分析: analyze_competitors
@@ -553,7 +569,7 @@ export class DepartmentExecutionServiceImpl {
         const pendingDrafts = db
           .select()
           .from(threadPostDrafts)
-          .where(eq(threadPostDrafts.status, "approved"))
+          .where(eq(threadPostDrafts.status, "audited"))
           .all().length;
         const dueSlots = db
           .select()
@@ -605,16 +621,16 @@ export class DepartmentExecutionServiceImpl {
           },
           recommendation:
             dueSlots > 0
-                ? "公開実行推奨"
-                : pendingReplies > 0
-                  ? "リプライ処理推奨"
-                  : pendingDrafts === 0
-                    ? "ドラフト生成が必要"
-                    : "在庫十分。動く必要なし",
+              ? "公開実行推奨"
+              : pendingReplies > 0
+                ? "リプライ処理推奨"
+                : pendingDrafts === 0
+                  ? "ドラフト生成が必要"
+                  : "在庫十分。動く必要なし",
           lastExecutedAt: this.getLastRun("threads"),
         };
       },
-      execute: async ({ action, instruction }) => {
+      execute: async ({ action, instruction, experimentContext }) => {
         if (instruction) {
           logger.info(
             { department: "threads", instruction },
@@ -652,7 +668,10 @@ export class DepartmentExecutionServiceImpl {
             "cadence-optimizer",
             "Threadsの投稿頻度と時間帯を最適化",
             async () => {
-              await this.deps.optimizer.analyzeAndUpdate(this.deps.llm, "threads");
+              await this.deps.optimizer.analyzeAndUpdate(
+                this.deps.llm,
+                "threads",
+              );
               return "Threads schedule optimized";
             },
           );
@@ -700,6 +719,8 @@ export class DepartmentExecutionServiceImpl {
                 this.deps.llm,
                 this.deps.storage,
                 this.deps.dryRun,
+                undefined,
+                experimentContext,
               ),
           ),
         ];
@@ -718,6 +739,7 @@ export class DepartmentExecutionServiceImpl {
 
         return createResult(action, joinSummary(summaryParts), {
           publishedCount: published.length,
+          experimentId: experimentContext?.experimentId,
         });
       },
     };
@@ -744,7 +766,7 @@ export class DepartmentExecutionServiceImpl {
         const pendingNoteDrafts = db
           .select()
           .from(noteDrafts)
-          .where(eq(noteDrafts.status, "approved"))
+          .where(eq(noteDrafts.status, "audited"))
           .all().length;
         const dueNoteSlots = db
           .select()
@@ -757,16 +779,12 @@ export class DepartmentExecutionServiceImpl {
             ),
           )
           .all().length;
-        const publishedNotes = db
-          .select()
-          .from(notePostResults)
-          .all().length;
+        const publishedNotes = db.select().from(notePostResults).all().length;
         const noteResearchSnapshots = db
           .select()
           .from(competitorSnapshots)
           .all()
-          .filter((row) => row.source.startsWith("note_search:"))
-          .length;
+          .filter((row) => row.source.startsWith("note_search:")).length;
         const noteCurrentState = this.getLatestDepartmentSummary("note");
         const noteNotifications = this.getUnreadNotifications("note");
         const noteLiveSummary = `承認済み記事: ${pendingNoteDrafts}件、期限到来スロット: ${dueNoteSlots}件、公開済み: ${publishedNotes}件、競合スナップショット: ${noteResearchSnapshots}件${noteNotifications}`;
@@ -786,7 +804,7 @@ export class DepartmentExecutionServiceImpl {
               ? "note実績ゼロ。記事生成を最優先"
               : noteResearchSnapshots === 0
                 ? "競合リサーチを先に回すべき"
-              : pendingNoteDrafts === 0
+                : pendingNoteDrafts === 0
                   ? "記事生成が必要"
                   : dueNoteSlots > 0
                     ? "公開実行推奨"
@@ -794,7 +812,7 @@ export class DepartmentExecutionServiceImpl {
           lastExecutedAt: this.getLastRun("note"),
         };
       },
-      execute: async ({ action, instruction }) => {
+      execute: async ({ action, instruction, experimentContext }) => {
         if (instruction) {
           logger.info(
             { department: "note", instruction },
@@ -841,6 +859,7 @@ export class DepartmentExecutionServiceImpl {
                     this.deps.llm,
                     this.deps.storage,
                     this.deps.dryRun,
+                    experimentContext,
                   ),
                 ),
             ),
@@ -881,6 +900,7 @@ export class DepartmentExecutionServiceImpl {
 
         return createResult(action, joinSummary(summaryParts), {
           publishedCount: noteResults.length,
+          experimentId: experimentContext?.experimentId,
         });
       },
     };

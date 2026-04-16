@@ -4,8 +4,10 @@ import type { NoteApiClient } from "../../adapters/note-api/index.js";
 import type { ThreadsApiClient } from "../../adapters/threads-api/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
+import { createRuntimeLedgerRepository } from "../../db/repositories/runtime-ledger.js";
 import {
   contentSlots,
+  executionOutbox,
   noteDrafts,
   noteIdeas,
   notePostResults,
@@ -30,10 +32,15 @@ export interface PublishResult {
   draftId?: string;
 }
 
+export interface ChannelWritabilityGuard {
+  isChannelWritable(channel: "threads" | "note"): boolean;
+}
+
 export interface AutoPublisherOptions {
   maxPostsPerHour?: number;
   maxRepliesPerHour?: number;
   dryRun?: boolean;
+  operationsMode?: ChannelWritabilityGuard;
 }
 
 export interface AutoPublisherService {
@@ -71,9 +78,65 @@ type PendingSyncMetadata = {
   reason: string;
 };
 
-const DEFAULT_TARGET_CONVERSION_RATE = 0.025;
 const NOTE_TRAFFIC_SOURCE = "threads";
-const PRICE_TIERS = [490, 690, 980, 1480, 1980] as const;
+
+import { logger as pricingLogger } from "../../app/logger.js";
+import { getCompiledContractStore } from "../contracts/index.js";
+
+interface PricingPolicyThresholds {
+  priceTiers: number[];
+  freeThresholdChars: number;
+  paidTierChars: number[];
+  targetConversionRate: number;
+  priceUpConversionRate: number;
+  priceUpPurchases: number;
+  priceUpRevenueYen: number;
+  priceDownMinViews: number;
+  priceDownMaxPurchases: number;
+  priceDownMaxConversionRate: number;
+  priceDownFreeChars: number;
+}
+
+const FALLBACK_PRICING: PricingPolicyThresholds = {
+  priceTiers: [490, 690, 980, 1480, 1980],
+  freeThresholdChars: 3000,
+  paidTierChars: [5000, 8000],
+  targetConversionRate: 0.025,
+  priceUpConversionRate: 0.04,
+  priceUpPurchases: 3,
+  priceUpRevenueYen: 3000,
+  priceDownMinViews: 150,
+  priceDownMaxPurchases: 1,
+  priceDownMaxConversionRate: 0.01,
+  priceDownFreeChars: 4500,
+};
+
+function loadPricingPolicy(): PricingPolicyThresholds {
+  try {
+    const store = getCompiledContractStore();
+    const policy = store.policies.find((p) => p.id === "pricing");
+    const t = policy?.thresholds ?? {};
+    return {
+      priceTiers: Array.isArray(t.priceTiers) ? (t.priceTiers as number[]) : FALLBACK_PRICING.priceTiers,
+      freeThresholdChars: Number(t.freeThresholdChars) || FALLBACK_PRICING.freeThresholdChars,
+      paidTierChars: Array.isArray(t.paidTierChars) ? (t.paidTierChars as number[]) : FALLBACK_PRICING.paidTierChars,
+      targetConversionRate: Number(t.targetConversionRate) || FALLBACK_PRICING.targetConversionRate,
+      priceUpConversionRate: Number(t.priceUpConversionRate) || FALLBACK_PRICING.priceUpConversionRate,
+      priceUpPurchases: Number(t.priceUpPurchases) || FALLBACK_PRICING.priceUpPurchases,
+      priceUpRevenueYen: Number(t.priceUpRevenueYen) || FALLBACK_PRICING.priceUpRevenueYen,
+      priceDownMinViews: Number(t.priceDownMinViews) || FALLBACK_PRICING.priceDownMinViews,
+      priceDownMaxPurchases: Number(t.priceDownMaxPurchases) || FALLBACK_PRICING.priceDownMaxPurchases,
+      priceDownMaxConversionRate: Number(t.priceDownMaxConversionRate) || FALLBACK_PRICING.priceDownMaxConversionRate,
+      priceDownFreeChars: Number(t.priceDownFreeChars) || FALLBACK_PRICING.priceDownFreeChars,
+    };
+  } catch (error) {
+    pricingLogger.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      "[auto-publisher] Failed to load pricing policy; using fallback",
+    );
+    return FALLBACK_PRICING;
+  }
+}
 
 function buildTrafficSource(
   base: string,
@@ -111,21 +174,23 @@ function parseTrafficSource(raw: string | null | undefined): {
   return { source, metadata };
 }
 
-function normalizePriceToTier(priceYen: number): number {
-  return PRICE_TIERS.reduce((closest, tier) => {
+function normalizePriceToTier(priceYen: number, tiers: number[]): number {
+  if (tiers.length === 0) return priceYen;
+  return tiers.reduce((closest, tier) => {
     const currentDistance = Math.abs(priceYen - tier);
     const closestDistance = Math.abs(priceYen - closest);
     return currentDistance < closestDistance ? tier : closest;
-  }, PRICE_TIERS[0]);
+  }, tiers[0]);
 }
 
 function determineNotePrice(
   bodyText: string,
   history: NotePricingHistory,
 ): NotePricingResult {
+  const pp = loadPricingPolicy();
   const charCount = bodyText.length;
 
-  if (charCount < 3000) {
+  if (charCount < pp.freeThresholdChars) {
     return {
       isPaid: false,
       priceYen: 0,
@@ -145,12 +210,15 @@ function determineNotePrice(
 
   let priceYen: number;
   let reason = "本文長ベースの初期価格";
-  if (charCount < 5000) {
-    priceYen = 690;
-  } else if (charCount < 8000) {
-    priceYen = 980;
+  const [midChar, highChar] = pp.paidTierChars.length >= 2
+    ? pp.paidTierChars
+    : [5000, 8000];
+  if (charCount < midChar) {
+    priceYen = pp.priceTiers[1] ?? 690;
+  } else if (charCount < highChar) {
+    priceYen = pp.priceTiers[2] ?? 980;
   } else {
-    priceYen = 1480;
+    priceYen = pp.priceTiers[3] ?? 1480;
   }
 
   // Free preview: first 30% of the body, capped at 2000 characters
@@ -159,18 +227,18 @@ function determineNotePrice(
 
   if (history.sampleCount > 0) {
     if (
-      history.averageConversionRate >= 0.04 ||
-      history.averagePurchases >= 3 ||
-      history.averageRevenueYen >= 3000
+      history.averageConversionRate >= pp.priceUpConversionRate ||
+      history.averagePurchases >= pp.priceUpPurchases ||
+      history.averageRevenueYen >= pp.priceUpRevenueYen
     ) {
-      priceYen = normalizePriceToTier(priceYen + 300);
+      priceYen = normalizePriceToTier(priceYen + 300, pp.priceTiers);
       reason = "既存記事のCV/売上が強いため価格を引き上げ";
     } else if (
-      history.averageViews >= 150 &&
-      history.averagePurchases < 1 &&
-      history.averageConversionRate <= 0.01
+      history.averageViews >= pp.priceDownMinViews &&
+      history.averagePurchases < pp.priceDownMaxPurchases &&
+      history.averageConversionRate <= pp.priceDownMaxConversionRate
     ) {
-      if (charCount < 4500) {
+      if (charCount < pp.priceDownFreeChars) {
         return {
           isPaid: false,
           priceYen: 0,
@@ -187,10 +255,10 @@ function determineNotePrice(
         };
       }
 
-      priceYen = normalizePriceToTier(Math.max(PRICE_TIERS[0], priceYen - 200));
+      priceYen = normalizePriceToTier(Math.max(pp.priceTiers[0] ?? 490, priceYen - 200), pp.priceTiers);
       reason = "既存記事の購入率が弱いため価格を引き下げ";
     } else if (
-      history.averageConversionRate >= DEFAULT_TARGET_CONVERSION_RATE &&
+      history.averageConversionRate >= pp.targetConversionRate &&
       history.averageRevenueYen >= 1500
     ) {
       reason = "既存記事のCVが基準内のため基準価格を維持";
@@ -237,6 +305,8 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
   private readonly maxPostsPerHour: number;
   private readonly maxRepliesPerHour: number;
   private readonly dryRun: boolean;
+  private readonly operationsMode?: ChannelWritabilityGuard;
+  private readonly ledger = createRuntimeLedgerRepository();
 
   constructor(options: AutoPublisherOptions = {}) {
     this.maxPostsPerHour =
@@ -244,6 +314,46 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
     this.maxRepliesPerHour =
       options.maxRepliesPerHour ?? readEnvInt("MAX_REPLIES_PER_HOUR", 10);
     this.dryRun = options.dryRun ?? false;
+    this.operationsMode = options.operationsMode;
+  }
+
+  private isChannelWritable(channel: "threads" | "note"): boolean {
+    if (!this.operationsMode) return true;
+    const writable = this.operationsMode.isChannelWritable(channel);
+    if (!writable) {
+      logger.warn(
+        { channel },
+        "[auto-publisher] channel blocked by operations-mode guard",
+      );
+    }
+    return writable;
+  }
+
+  private enqueuePublishOutbox(input: {
+    targetPlatform: "threads" | "note";
+    slotId: string;
+    draftId: string;
+    payload: Record<string, unknown>;
+  }) {
+    const idempotencyKey = `publish:${input.targetPlatform}:${input.slotId}:${input.draftId}`;
+    const outbox = this.ledger.enqueueOutbox({
+      idempotencyKey,
+      targetPlatform: input.targetPlatform,
+      operationType: "publish",
+      payload: input.payload,
+    });
+    this.ledger.recordDecisionEvidence({
+      entityType: "execution_outbox",
+      entityId: outbox.id,
+      decisionType: "enqueue_publish",
+      evidence: {
+        slotId: input.slotId,
+        draftId: input.draftId,
+        targetPlatform: input.targetPlatform,
+        idempotencyKey,
+      },
+    });
+    return outbox;
   }
 
   private getEligibleThreadSlots(now: string) {
@@ -401,6 +511,11 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           draftId: draft.id,
           title: draft.title,
           priceYen: pricing.isPaid ? pricing.priceYen : 0,
+          campaignId: draft.campaignId,
+          angleId: draft.angleId,
+          ctaId: draft.ctaId,
+          priceVariantId: draft.priceVariantId,
+          canaryGroup: draft.canaryGroup,
           trafficSource,
           publishedAt,
           createdAt: publishedAt,
@@ -417,6 +532,11 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
         title: draft.title,
         noteUrl: metadata.noteUrl,
         priceYen: pricing.isPaid ? pricing.priceYen : 0,
+        campaignId: draft.campaignId,
+        angleId: draft.angleId,
+        ctaId: draft.ctaId,
+        priceVariantId: draft.priceVariantId,
+        canaryGroup: draft.canaryGroup,
         views: 0,
         likes: 0,
         commentsCount: 0,
@@ -475,6 +595,9 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
   async publishApprovedThreadDrafts(
     api: ThreadsApiClient,
   ): Promise<PublishResult[]> {
+    if (!this.isChannelWritable("threads")) {
+      return [];
+    }
     const now = new Date().toISOString();
     const eligibleSlots = this.getEligibleThreadSlots(now);
 
@@ -513,6 +636,31 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
         continue;
       }
 
+      let outboxId: string | null = null;
+      const outbox = this.enqueuePublishOutbox({
+        targetPlatform: "threads",
+        slotId: slot.id,
+        draftId: draft.id,
+        payload: {
+          slotId: slot.id,
+          draftId: draft.id,
+          body: draft.body,
+          campaignId: draft.campaignId,
+          angleId: draft.angleId,
+          ctaId: draft.ctaId,
+          canaryGroup: draft.canaryGroup,
+        },
+      });
+      const claimed = this.ledger.claimOutbox(outbox.id, `threads:${slot.id}`);
+      outboxId = outbox.id;
+      if (!claimed) {
+        logger.warn(
+          { slotId: slot.id, draftId: draft.id, outboxId: outbox.id },
+          "Thread outbox was already claimed",
+        );
+        continue;
+      }
+
       try {
         const { id: postId, permalink } = await api.publishPost(draft.body);
         const publishedAt = new Date().toISOString();
@@ -530,6 +678,10 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
             id: randomUUID(),
             draftId: draft.id,
             threadsPostId: postId,
+            campaignId: draft.campaignId,
+            angleId: draft.angleId,
+            ctaId: draft.ctaId,
+            canaryGroup: draft.canaryGroup,
             impressions: 0,
             likes: 0,
             repliesCount: 0,
@@ -539,10 +691,31 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           })
           .run();
 
+        this.ledger.insertPublicationEvent({
+          targetPlatform: "threads",
+          outboxId: outbox.id,
+          draftId: draft.id,
+          slotId: slot.id,
+          campaignId: draft.campaignId ?? undefined,
+          angleId: draft.angleId ?? undefined,
+          ctaId: draft.ctaId ?? undefined,
+          canaryGroup: draft.canaryGroup ?? undefined,
+          externalId: postId,
+          externalUrl: permalink,
+          externalFingerprint: `threads:${postId}`,
+          publishedAt,
+        });
+        this.ledger.completeOutbox(outbox.id);
         await this.completeSlot(slot.id);
         results.push({ id: postId, url: permalink, type: "threads" });
         logger.info({ draftId: draft.id, postId }, "Auto-published to Threads");
       } catch (error) {
+        if (outboxId) {
+          this.ledger.failOutbox(
+            outboxId,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
         await this.unreserveSlot(slot.id);
         logger.error(
           { draftId: draft.id, slotId: slot.id, error },
@@ -557,6 +730,9 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
   async publishApprovedNoteDrafts(
     noteApi: NoteApiClient,
   ): Promise<PublishResult[]> {
+    if (!this.isChannelWritable("note")) {
+      return [];
+    }
     const now = new Date().toISOString();
     const eligibleSlots = this.getEligibleNoteSlots(now);
 
@@ -599,6 +775,7 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
         continue;
       }
 
+      let outboxId: string | null = null;
       try {
         const pricingHistory = this.collectNotePricingHistory(draft);
         const pricing = determineNotePrice(draft.body, pricingHistory);
@@ -614,6 +791,33 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           },
           "Determined note pricing",
         );
+
+        const outbox = this.enqueuePublishOutbox({
+          targetPlatform: "note",
+          slotId: slot.id,
+          draftId: draft.id,
+          payload: {
+            slotId: slot.id,
+            draftId: draft.id,
+            title: draft.title,
+            body: draft.body,
+            campaignId: draft.campaignId,
+            angleId: draft.angleId,
+            ctaId: draft.ctaId,
+            priceVariantId: draft.priceVariantId,
+            canaryGroup: draft.canaryGroup,
+            pricing,
+          },
+        });
+        const claimed = this.ledger.claimOutbox(outbox.id, `note:${slot.id}`);
+        outboxId = outbox.id;
+        if (!claimed) {
+          logger.warn(
+            { slotId: slot.id, draftId: draft.id, outboxId: outbox.id },
+            "Note outbox was already claimed",
+          );
+          continue;
+        }
 
         const published = await noteApi.publishArticle(
           draft.title,
@@ -643,6 +847,11 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
                 title: draft.title,
                 noteUrl: published.url,
                 priceYen: pricing.isPaid ? pricing.priceYen : 0,
+                campaignId: draft.campaignId,
+                angleId: draft.angleId,
+                ctaId: draft.ctaId,
+                priceVariantId: draft.priceVariantId,
+                canaryGroup: draft.canaryGroup,
                 views: 0,
                 likes: 0,
                 commentsCount: 0,
@@ -693,6 +902,22 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           });
         }
 
+        this.ledger.insertPublicationEvent({
+          targetPlatform: "note",
+          outboxId: outbox.id,
+          draftId: draft.id,
+          slotId: slot.id,
+          campaignId: draft.campaignId ?? undefined,
+          angleId: draft.angleId ?? undefined,
+          ctaId: draft.ctaId ?? undefined,
+          priceVariantId: draft.priceVariantId ?? undefined,
+          canaryGroup: draft.canaryGroup ?? undefined,
+          externalId: published.noteId,
+          externalUrl: published.url,
+          externalFingerprint: `note:${published.noteId}`,
+          publishedAt,
+        });
+        this.ledger.completeOutbox(outbox.id);
         await this.completeSlot(slot.id);
 
         results.push({
@@ -706,17 +931,12 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           "Auto-published note draft",
         );
       } catch (error) {
-        const errorMsg =
-          error instanceof Error ? error.message : String(error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
         const isSessionExpired =
           /NOTE_SESSION_EXPIRED|セッション|ログイン|storageState/i.test(
             errorMsg,
           );
 
-        // Fix-1a (2026-04-14): エラー記録を強化
-        // 1. outbound_notifications に記録してユーザー可視化
-        // 2. 認証切れなら slot を failed にして無限リトライ回避
-        // 3. 一時エラー (rate limit等) は unreserve のまま再挑戦させる
         logger.error(
           {
             draftId: draft.id,
@@ -727,16 +947,36 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
           "Failed to auto-publish note draft",
         );
 
+        if (isSessionExpired) {
+          // Spec §21 (note session ルール): 運用中の手動再ログインを要求しない。
+          // session 失効時は sessionHealth を quarantined に降格し、operations-mode が
+          // 自動的に threads_only モードへ移行する。次のheartbeatで自動復帰判定。
+          this.ledger.updateSessionHealth({
+            scope: "note",
+            provider: "playwright",
+            state: "quarantined",
+            detail: `note publish session expired (draftId=${draft.id})`,
+            metadata: { draftId: draft.id, errorMsg: errorMsg.slice(0, 500) },
+          });
+          this.ledger.recordAnomaly({
+            category: "note_session_quarantined",
+            severity: "high",
+            message:
+              "note session が失効したため quarantine に降格。operations-mode が threads_only に降格します",
+            metadata: { draftId: draft.id, slotId: slot.id },
+          });
+        }
+
         try {
           db.insert(outboundNotifications)
             .values({
               id: randomUUID(),
               type: isSessionExpired
-                ? "note_session_expired"
+                ? "note_session_quarantined"
                 : "note_publish_failed",
               channel: "ops",
               content: isSessionExpired
-                ? `note.comセッション切れ。'npm run note:login'を手動実行して再ログインしてください。draftId=${draft.id}`
+                ? `note運用を一時停止し、Threads-only モードに切替えました (draftId=${draft.id})`
                 : `note自動公開失敗: ${errorMsg.slice(0, 200)} (draftId=${draft.id})`,
               sentAt: new Date().toISOString(),
             })
@@ -746,6 +986,20 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
             { notifyErr },
             "Failed to record note publish failure notification",
           );
+        }
+
+        if (outboxId) {
+          this.ledger.failOutbox(outboxId, errorMsg);
+        } else {
+          const outboxIdempotencyKey = `publish:note:${slot.id}:${draft.id}`;
+          const outbox = db
+            .select()
+            .from(executionOutbox)
+            .where(eq(executionOutbox.idempotencyKey, outboxIdempotencyKey))
+            .get();
+          if (outbox) {
+            this.ledger.failOutbox(outbox.id, errorMsg);
+          }
         }
 
         if (isSessionExpired) {
@@ -760,6 +1014,9 @@ export class AutoPublisherServiceImpl implements AutoPublisherService {
   }
 
   async sendSafeReplies(api: ThreadsApiClient): Promise<number> {
+    if (!this.isChannelWritable("threads")) {
+      return 0;
+    }
     const pending = db
       .select({
         decisionId: replyDecisions.id,

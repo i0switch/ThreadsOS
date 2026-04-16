@@ -10,7 +10,7 @@
  *   HEARTBEAT_LOOP_INTERVAL_MS=1800000 npx tsx src/jobs/heartbeat-loop.ts
  */
 import { fork } from "node:child_process";
-import { resolve, dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { logger } from "../app/logger.js";
 
@@ -40,7 +40,10 @@ const heartbeatScript = resolve(__dirname, "hourly-heartbeat.ts");
 let iterationCount = 0;
 let isShuttingDown = false;
 
-function runHeartbeatIteration(): Promise<{ code: number | null; signal: string | null }> {
+function runHeartbeatIteration(): Promise<{
+  code: number | null;
+  signal: string | null;
+}> {
   return new Promise((resolve) => {
     iterationCount++;
     const args = dryRun ? ["--dry-run"] : [];
@@ -57,7 +60,10 @@ function runHeartbeatIteration(): Promise<{ code: number | null; signal: string 
 
     child.on("exit", (code, signal) => {
       if (code === 0) {
-        logger.info({ iteration: iterationCount }, "Heartbeat iteration completed");
+        logger.info(
+          { iteration: iterationCount },
+          "Heartbeat iteration completed",
+        );
       } else {
         logger.error(
           { iteration: iterationCount, code, signal },
@@ -119,6 +125,9 @@ process.on("SIGTERM", () => {
 });
 
 loop().catch((err) => {
-  logger.error({ error: err instanceof Error ? err.message : String(err) }, "Loop crashed");
+  logger.error(
+    { error: err instanceof Error ? err.message : String(err) },
+    "Loop crashed",
+  );
   process.exit(1);
 });

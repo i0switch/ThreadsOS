@@ -104,8 +104,8 @@ describe("DepartmentExecution collectReports()", () => {
     const commandReport = reports.find((r) => r.department === "command");
 
     expect(commandReport).toBeDefined();
-    expect(commandReport!.metrics.pendingInputs).toBe(1);
-    expect(commandReport!.recommendation).toContain("process_human_inputs");
+    expect(commandReport?.metrics.pendingInputs).toBe(1);
+    expect(commandReport?.recommendation).toContain("process_human_inputs");
   });
 
   it("command report shows no-action when no pending inputs", () => {
@@ -113,8 +113,8 @@ describe("DepartmentExecution collectReports()", () => {
     const reports = service.collectReports();
     const commandReport = reports.find((r) => r.department === "command");
 
-    expect(commandReport!.metrics.pendingInputs).toBe(0);
-    expect(commandReport!.recommendation).toBe("動く必要なし");
+    expect(commandReport?.metrics.pendingInputs).toBe(0);
+    expect(commandReport?.recommendation).toBe("動く必要なし");
   });
 
   it("note report prioritizes generation when no published notes exist", () => {
@@ -123,8 +123,8 @@ describe("DepartmentExecution collectReports()", () => {
     const noteReport = reports.find((r) => r.department === "note");
 
     expect(noteReport).toBeDefined();
-    expect(noteReport!.metrics.publishedNotes).toBe(0);
-    expect(noteReport!.recommendation).toContain("最優先");
+    expect(noteReport?.metrics.publishedNotes).toBe(0);
+    expect(noteReport?.recommendation).toContain("最優先");
   });
 
   it("competitive analysis report highlights missing snapshots when none exist", () => {
@@ -135,8 +135,8 @@ describe("DepartmentExecution collectReports()", () => {
     );
 
     expect(analysisReport).toBeDefined();
-    expect(analysisReport!.metrics.snapshotCount).toBe(0);
-    expect(analysisReport!.recommendation).toContain("蓄積");
+    expect(analysisReport?.metrics.snapshotCount).toBe(0);
+    expect(analysisReport?.recommendation).toContain("蓄積");
   });
 
   it("report summary includes DB-backed current-state summary when present", () => {
@@ -151,7 +151,7 @@ describe("DepartmentExecution collectReports()", () => {
     const commandReport = reports.find((r) => r.department === "command");
 
     expect(commandReport).toBeDefined();
-    expect(commandReport!.summary).toContain("前回: 指示を3件処理済み");
+    expect(commandReport?.summary).toContain("前回: 指示を3件処理済み");
   });
 
   it("report summary is live-only when no DB summary exists", () => {
@@ -160,7 +160,7 @@ describe("DepartmentExecution collectReports()", () => {
     const commandReport = reports.find((r) => r.department === "command");
 
     expect(commandReport).toBeDefined();
-    expect(commandReport!.summary).not.toContain("前回の状態");
+    expect(commandReport?.summary).not.toContain("前回の状態");
   });
 
   it("command report surfaces unread notifications from other departments", async () => {
@@ -192,14 +192,14 @@ describe("DepartmentExecution collectReports()", () => {
     const commandReport = reports.find((r) => r.department === "command");
 
     expect(commandReport).toBeDefined();
-    expect(commandReport!.summary).toContain("他部署からの通知2件");
-    expect(commandReport!.summary).toContain(
+    expect(commandReport?.summary).toContain("他部署からの通知2件");
+    expect(commandReport?.summary).toContain(
       "[external-research→research_update]",
     );
-    expect(commandReport!.summary).toContain(
+    expect(commandReport?.summary).toContain(
       "[competitive-analysis→analysis_complete]",
     );
-    expect(commandReport!.recommendation).toBe(
+    expect(commandReport?.recommendation).toBe(
       "他部署通知を踏まえて全体判断を更新すべき",
     );
 
@@ -210,8 +210,6 @@ describe("DepartmentExecution collectReports()", () => {
       .filter((row) => row.toDepartment === "command");
 
     expect(commandNotifications).toHaveLength(2);
-    expect(
-      commandNotifications.every((row) => row.readAt !== null),
-    ).toBe(true);
+    expect(commandNotifications.every((row) => row.readAt !== null)).toBe(true);
   });
 });

@@ -201,16 +201,6 @@ beforeAll(async () => {
     created_at TEXT NOT NULL
   )`);
 
-  db.run(sql`CREATE TABLE IF NOT EXISTS human_review_items (
-    id TEXT PRIMARY KEY,
-    item_type TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    reviewed_at TEXT,
-    reviewer_note TEXT,
-    created_at TEXT NOT NULL
-  )`);
 });
 
 afterEach(() => {
@@ -219,7 +209,6 @@ afterEach(() => {
   db?.run(sql`DELETE FROM reply_decisions`);
   db?.run(sql`DELETE FROM thread_replies`);
   db?.run(sql`DELETE FROM improvement_insights`);
-  db?.run(sql`DELETE FROM human_review_items`);
   db?.run(sql`DELETE FROM thread_post_results`);
   vi.restoreAllMocks();
 });

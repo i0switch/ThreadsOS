@@ -10,7 +10,6 @@ import { type Env, loadEnv } from "../../config/env.js";
 import { db } from "../../db/index.js";
 import {
   contentSlots,
-  humanReviewItems,
   improvementInsights,
   notePostResults,
   outboundNotifications,
@@ -97,11 +96,6 @@ export class NotificationServiceImpl implements NotificationService {
 
     const threadResults = db.select().from(threadPostResults).all();
     const noteResults = db.select().from(notePostResults).all();
-    const reviews = db
-      .select()
-      .from(humanReviewItems)
-      .where(eq(humanReviewItems.status, "pending"))
-      .all();
     const thumbnails = db
       .select()
       .from(thumbnailTasks)
@@ -162,9 +156,6 @@ export class NotificationServiceImpl implements NotificationService {
       ...thumbnails
         .slice(0, 3)
         .map((task) => `noteサムネ対応: ${task.noteDraftId}`),
-      ...reviews
-        .slice(0, 3)
-        .map((item) => `${item.itemType} レビュー待ち: ${item.itemId}`),
     ];
 
     return {
@@ -183,7 +174,7 @@ export class NotificationServiceImpl implements NotificationService {
           (sum, result) => sum + result.repliesCount,
           0,
         ),
-        pendingReviews: reviews.length,
+        pendingReviews: 0,
       },
       recentPosts,
       upcomingSchedule: upcoming.map((slot) => ({

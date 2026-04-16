@@ -25,6 +25,11 @@ function bootstrapTables() {
       scheduled_at TEXT NOT NULL,
       topic_id TEXT,
       draft_id TEXT,
+      campaign_id TEXT,
+      angle_id TEXT,
+      cta_id TEXT,
+      price_variant_id TEXT,
+      canary_group TEXT,
       status TEXT NOT NULL DEFAULT 'pending',
       priority INTEGER NOT NULL DEFAULT 5,
       created_at TEXT NOT NULL,
@@ -48,6 +53,11 @@ function bootstrapTables() {
       body TEXT NOT NULL,
       outline TEXT,
       cta TEXT,
+      campaign_id TEXT,
+      angle_id TEXT,
+      cta_id TEXT,
+      price_variant_id TEXT,
+      canary_group TEXT,
       publish_readiness_score REAL,
       status TEXT NOT NULL DEFAULT 'draft',
       created_at TEXT NOT NULL,
@@ -60,6 +70,11 @@ function bootstrapTables() {
       title TEXT,
       note_url TEXT,
       price_yen INTEGER,
+      campaign_id TEXT,
+      angle_id TEXT,
+      cta_id TEXT,
+      price_variant_id TEXT,
+      canary_group TEXT,
       views INTEGER NOT NULL DEFAULT 0,
       likes INTEGER NOT NULL DEFAULT 0,
       comments_count INTEGER NOT NULL DEFAULT 0,
@@ -78,6 +93,10 @@ function bootstrapTables() {
       hook_type TEXT NOT NULL,
       cta_type TEXT NOT NULL,
       note_transition TEXT,
+      campaign_id TEXT,
+      angle_id TEXT,
+      cta_id TEXT,
+      canary_group TEXT,
       status TEXT NOT NULL DEFAULT 'draft',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -87,6 +106,10 @@ function bootstrapTables() {
       id TEXT PRIMARY KEY NOT NULL,
       draft_id TEXT NOT NULL,
       threads_post_id TEXT NOT NULL UNIQUE,
+      campaign_id TEXT,
+      angle_id TEXT,
+      cta_id TEXT,
+      canary_group TEXT,
       impressions INTEGER NOT NULL DEFAULT 0,
       likes INTEGER NOT NULL DEFAULT 0,
       replies_count INTEGER NOT NULL DEFAULT 0,
@@ -132,6 +155,50 @@ function bootstrapTables() {
       priority TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS execution_outbox (
+      id TEXT PRIMARY KEY NOT NULL,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      payload_hash TEXT NOT NULL,
+      target_platform TEXT NOT NULL,
+      operation_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      payload_json TEXT NOT NULL,
+      available_at TEXT NOT NULL,
+      claimed_by TEXT,
+      claimed_at TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS publication_events (
+      id TEXT PRIMARY KEY NOT NULL,
+      target_platform TEXT NOT NULL,
+      outbox_id TEXT,
+      draft_id TEXT,
+      slot_id TEXT,
+      campaign_id TEXT,
+      angle_id TEXT,
+      cta_id TEXT,
+      price_variant_id TEXT,
+      canary_group TEXT,
+      external_id TEXT,
+      external_url TEXT,
+      external_fingerprint TEXT NOT NULL UNIQUE,
+      published_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS decision_evidence (
+      id TEXT PRIMARY KEY NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      decision_type TEXT NOT NULL,
+      evidence_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
 }
 
@@ -148,6 +215,9 @@ function clearTables() {
     DELETE FROM reply_decisions;
     DELETE FROM channel_performance_snapshots;
     DELETE FROM improvement_insights;
+    DELETE FROM execution_outbox;
+    DELETE FROM publication_events;
+    DELETE FROM decision_evidence;
   `);
 }
 
@@ -354,6 +424,11 @@ describe("note publish services", () => {
         body: "D".repeat(4000),
         outline: "outline",
         cta: "cta",
+        campaignId: "campaign-sync",
+        angleId: "angle-sync",
+        ctaId: "cta-sync",
+        priceVariantId: "price-sync",
+        canaryGroup: "group-sync",
         publishReadinessScore: 8,
         status: "audited",
         createdAt: now,
@@ -422,6 +497,11 @@ describe("note publish services", () => {
       .get();
 
     expect(recovered?.trafficSource).toContain("status=recovered_sync");
+    expect(recovered?.campaignId).toBe("campaign-sync");
+    expect(recovered?.angleId).toBe("angle-sync");
+    expect(recovered?.ctaId).toBe("cta-sync");
+    expect(recovered?.priceVariantId).toBe("price-sync");
+    expect(recovered?.canaryGroup).toBe("group-sync");
     expect(recovered?.revenueYen).toBe(1960);
     expect(recovered?.conversionRate).toBe(0.02);
     expect(draft?.status).toBe("published");

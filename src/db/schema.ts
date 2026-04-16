@@ -9,25 +9,32 @@ import {
 
 // Status enums for runtime validation
 export const DRAFT_STATUSES = [
-  "draft",
+  "drafted",
   "audited",
-  "approved",
+  "scheduled",
   "published",
-  "rejected",
+  "measured",
+  "scored",
+  "archived",
 ] as const;
 export const AUDIT_VERDICTS = [
   "pass",
-  "revise",
-  "reject",
-  "human_review",
+  "rewrite",
+  "skip",
+  "quarantine",
 ] as const;
 export const SEVERITIES = ["low", "medium", "high"] as const;
 export const REPLY_DECISIONS = [
   "safe_auto_reply",
-  "human_review",
+  "quarantine",
   "ignore",
 ] as const;
-export const REVIEW_STATUSES = ["pending", "approved", "rejected"] as const;
+export const AUDITOR_ACTIONS = [
+  "pass",
+  "rewrite",
+  "skip",
+  "quarantine",
+] as const;
 export const JOB_STATUSES = ["running", "completed", "failed"] as const;
 export const NOTE_IDEA_STATUSES = [
   "idea",
@@ -38,12 +45,47 @@ export const NOTE_IDEA_STATUSES = [
   "published",
 ] as const;
 export const NOTE_DRAFT_STATUSES = [
-  "draft",
+  "drafted",
   "audited",
-  "approved",
+  "scheduled",
   "published",
-  "rejected",
+  "measured",
+  "scored",
+  "archived",
 ] as const;
+
+export const CAMPAIGN_STATUSES = ["active", "paused", "archived"] as const;
+export const CAMPAIGN_BOTTLENECKS = [
+  "Reach",
+  "Click",
+  "Read",
+  "Buy",
+] as const;
+
+export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
+export type CampaignBottleneck = (typeof CAMPAIGN_BOTTLENECKS)[number];
+
+export const campaigns = sqliteTable(
+  "campaigns",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    theme: text("theme").notNull(),
+    bottleneckFocus: text("bottleneck_focus"),
+    status: text("status").notNull().default("active"),
+    startedAt: text("started_at").notNull(),
+    endedAt: text("ended_at"),
+    reasoning: text("reasoning"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    statusStartedIdx: index("campaigns_status_started_idx").on(
+      table.status,
+      table.startedAt,
+    ),
+  }),
+);
 
 export const topics = sqliteTable("topics", {
   id: text("id").primaryKey(),
@@ -72,7 +114,11 @@ export const threadPostDrafts = sqliteTable("thread_post_drafts", {
   hookType: text("hook_type").notNull(),
   ctaType: text("cta_type").notNull(),
   noteTransition: text("note_transition"),
-  status: text("status").notNull().default("draft"),
+  campaignId: text("campaign_id"),
+  angleId: text("angle_id"),
+  ctaId: text("cta_id"),
+  canaryGroup: text("canary_group"),
+  status: text("status").notNull().default("drafted"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -91,6 +137,10 @@ export const threadPostResults = sqliteTable("thread_post_results", {
   id: text("id").primaryKey(),
   draftId: text("draft_id").notNull(),
   threadsPostId: text("threads_post_id").notNull().unique(),
+  campaignId: text("campaign_id"),
+  angleId: text("angle_id"),
+  ctaId: text("cta_id"),
+  canaryGroup: text("canary_group"),
   impressions: integer("impressions").notNull().default(0),
   likes: integer("likes").notNull().default(0),
   repliesCount: integer("replies_count").notNull().default(0),
@@ -145,8 +195,13 @@ export const noteDrafts = sqliteTable("note_drafts", {
   body: text("body").notNull(),
   outline: text("outline"),
   cta: text("cta"),
+  campaignId: text("campaign_id"),
+  angleId: text("angle_id"),
+  ctaId: text("cta_id"),
+  priceVariantId: text("price_variant_id"),
+  canaryGroup: text("canary_group"),
   publishReadinessScore: real("publish_readiness_score"),
-  status: text("status").notNull().default("draft"),
+  status: text("status").notNull().default("drafted"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
@@ -190,6 +245,11 @@ export const contentSlots = sqliteTable(
     scheduledAt: text("scheduled_at").notNull(),
     topicId: text("topic_id"),
     draftId: text("draft_id"),
+    campaignId: text("campaign_id"),
+    angleId: text("angle_id"),
+    ctaId: text("cta_id"),
+    priceVariantId: text("price_variant_id"),
+    canaryGroup: text("canary_group"),
     status: text("status").notNull().default("pending"),
     priority: integer("priority").notNull().default(5),
     createdAt: text("created_at").notNull(),
@@ -232,6 +292,11 @@ export const notePostResults = sqliteTable("note_post_results", {
   title: text("title"),
   noteUrl: text("note_url"),
   priceYen: integer("price_yen"),
+  campaignId: text("campaign_id"),
+  angleId: text("angle_id"),
+  ctaId: text("cta_id"),
+  priceVariantId: text("price_variant_id"),
+  canaryGroup: text("canary_group"),
   views: integer("views").notNull().default(0),
   likes: integer("likes").notNull().default(0),
   commentsCount: integer("comments_count").notNull().default(0),
@@ -258,6 +323,19 @@ export const LLM_TASK_STATUSES = [
   "done",
   "error",
 ] as const;
+export const EXECUTION_OUTBOX_STATUSES = [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+] as const;
+
+export const SESSION_HEALTH_STATES = [
+  "healthy",
+  "degraded",
+  "quarantined",
+  "recovered",
+] as const;
 
 export const llmTaskQueue = sqliteTable("llm_task_queue", {
   id: text("id").primaryKey(),
@@ -269,6 +347,287 @@ export const llmTaskQueue = sqliteTable("llm_task_queue", {
   error: text("error"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+});
+
+export const funnelSnapshots = sqliteTable(
+  "funnel_snapshots",
+  {
+    id: text("id").primaryKey(),
+    periodKey: text("period_key").notNull(),
+    periodType: text("period_type").notNull(),
+    impressions: integer("impressions").notNull().default(0),
+    profileTransitions: integer("profile_transitions").notNull().default(0),
+    noteClicks: integer("note_clicks").notNull().default(0),
+    noteViews: integer("note_views").notNull().default(0),
+    purchases: integer("purchases").notNull().default(0),
+    revenue: integer("revenue").notNull().default(0),
+    capturedAt: text("captured_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    periodUniq: uniqueIndex("funnel_snapshots_period_unique").on(
+      table.periodType,
+      table.periodKey,
+    ),
+  }),
+);
+
+export const threadsMetrics = sqliteTable("threads_metrics", {
+  id: text("id").primaryKey(),
+  publicationEventId: text("publication_event_id"),
+  draftId: text("draft_id"),
+  campaignId: text("campaign_id"),
+  angleId: text("angle_id"),
+  ctaId: text("cta_id"),
+  canaryGroup: text("canary_group"),
+  impressions: integer("impressions").notNull().default(0),
+  likes: integer("likes").notNull().default(0),
+  replies: integer("replies").notNull().default(0),
+  shares: integer("shares").notNull().default(0),
+  profileTransitions: integer("profile_transitions").notNull().default(0),
+  capturedAt: text("captured_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const noteMetrics = sqliteTable("note_metrics", {
+  id: text("id").primaryKey(),
+  publicationEventId: text("publication_event_id"),
+  draftId: text("draft_id"),
+  campaignId: text("campaign_id"),
+  angleId: text("angle_id"),
+  ctaId: text("cta_id"),
+  priceVariantId: text("price_variant_id"),
+  canaryGroup: text("canary_group"),
+  noteClicks: integer("note_clicks").notNull().default(0),
+  noteViews: integer("note_views").notNull().default(0),
+  purchases: integer("purchases").notNull().default(0),
+  revenue: integer("revenue").notNull().default(0),
+  conversionRate: real("conversion_rate").notNull().default(0),
+  capturedAt: text("captured_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const revenueEvents = sqliteTable("revenue_events", {
+  id: text("id").primaryKey(),
+  publicationEventId: text("publication_event_id"),
+  draftId: text("draft_id"),
+  campaignId: text("campaign_id"),
+  priceVariantId: text("price_variant_id"),
+  amountYen: integer("amount_yen").notNull(),
+  purchasesCount: integer("purchases_count").notNull().default(1),
+  occurredAt: text("occurred_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const experiments = sqliteTable(
+  "experiments",
+  {
+    id: text("id").primaryKey(),
+    cycleId: text("cycle_id").notNull(),
+    status: text("status").notNull().default("planned"),
+    bottleneck: text("bottleneck").notNull(),
+    actionType: text("action_type").notNull(),
+    channel: text("channel").notNull(),
+    patternKey: text("pattern_key").notNull(),
+    primaryMetric: text("primary_metric").notNull(),
+    hypothesis: text("hypothesis").notNull(),
+    guidance: text("guidance").notNull(),
+    sampleSize: integer("sample_size").notNull().default(1),
+    canaryGroup: text("canary_group").notNull().default("canary"),
+    angleId: text("angle_id"),
+    ctaId: text("cta_id"),
+    baselineJson: text("baseline_json").notNull(),
+    diagnosisJson: text("diagnosis_json").notNull(),
+    selectionJson: text("selection_json").notNull(),
+    launchedAt: text("launched_at"),
+    promotedAt: text("promoted_at"),
+    rejectedAt: text("rejected_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    cycleIdx: index("experiments_cycle_idx").on(table.cycleId, table.createdAt),
+    statusIdx: index("experiments_status_idx").on(
+      table.status,
+      table.updatedAt,
+    ),
+  }),
+);
+
+export const experimentResults = sqliteTable(
+  "experiment_results",
+  {
+    id: text("id").primaryKey(),
+    experimentId: text("experiment_id").notNull(),
+    windowHours: integer("window_hours").notNull(),
+    status: text("status").notNull().default("pending"),
+    scheduledFor: text("scheduled_for").notNull(),
+    measuredAt: text("measured_at"),
+    outcome: text("outcome"),
+    metricsJson: text("metrics_json"),
+    note: text("note"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    experimentWindowUniq: uniqueIndex(
+      "experiment_results_experiment_window_unique",
+    ).on(table.experimentId, table.windowHours),
+    statusScheduleIdx: index("experiment_results_status_schedule_idx").on(
+      table.status,
+      table.scheduledFor,
+    ),
+  }),
+);
+
+export const winningPatterns = sqliteTable(
+  "winning_patterns",
+  {
+    id: text("id").primaryKey(),
+    experimentId: text("experiment_id").notNull(),
+    patternKey: text("pattern_key").notNull(),
+    bottleneck: text("bottleneck").notNull(),
+    actionType: text("action_type").notNull(),
+    primaryMetric: text("primary_metric").notNull(),
+    baselineValue: real("baseline_value").notNull().default(0),
+    observedValue: real("observed_value").notNull().default(0),
+    evidenceJson: text("evidence_json").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    patternIdx: index("winning_patterns_key_idx").on(
+      table.patternKey,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const losingPatterns = sqliteTable(
+  "losing_patterns",
+  {
+    id: text("id").primaryKey(),
+    experimentId: text("experiment_id").notNull(),
+    patternKey: text("pattern_key").notNull(),
+    bottleneck: text("bottleneck").notNull(),
+    actionType: text("action_type").notNull(),
+    primaryMetric: text("primary_metric").notNull(),
+    baselineValue: real("baseline_value").notNull().default(0),
+    observedValue: real("observed_value").notNull().default(0),
+    evidenceJson: text("evidence_json").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    patternIdx: index("losing_patterns_key_idx").on(
+      table.patternKey,
+      table.createdAt,
+    ),
+  }),
+);
+
+export const sessionHealth = sqliteTable("session_health", {
+  scope: text("scope").primaryKey(),
+  state: text("state").notNull().default("healthy"),
+  provider: text("provider").notNull(),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  lastSuccessAt: text("last_success_at"),
+  lastFailureAt: text("last_failure_at"),
+  detail: text("detail"),
+  metadataJson: text("metadata_json"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const jobRuns = sqliteTable(
+  "job_runs",
+  {
+    id: text("id").primaryKey(),
+    jobName: text("job_name").notNull(),
+    leaseKey: text("lease_key").notNull(),
+    ownerId: text("owner_id").notNull(),
+    status: text("status").notNull(),
+    startedAt: text("started_at").notNull(),
+    finishedAt: text("finished_at"),
+    dryRun: integer("dry_run").notNull().default(0),
+    resultSummary: text("result_summary"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    jobStartedIdx: index("job_runs_job_started_idx").on(
+      table.jobName,
+      table.startedAt,
+    ),
+  }),
+);
+
+export const jobLeases = sqliteTable("job_leases", {
+  id: text("id").primaryKey(),
+  leaseKey: text("lease_key").notNull().unique(),
+  ownerId: text("owner_id").notNull(),
+  heartbeatScope: text("heartbeat_scope"),
+  acquiredAt: text("acquired_at").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const executionOutbox = sqliteTable(
+  "execution_outbox",
+  {
+    id: text("id").primaryKey(),
+    idempotencyKey: text("idempotency_key").notNull(),
+    payloadHash: text("payload_hash").notNull(),
+    targetPlatform: text("target_platform").notNull(),
+    operationType: text("operation_type").notNull(),
+    status: text("status").notNull().default("pending"),
+    payloadJson: text("payload_json").notNull(),
+    availableAt: text("available_at").notNull(),
+    claimedBy: text("claimed_by"),
+    claimedAt: text("claimed_at"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    idempotencyUniq: uniqueIndex("execution_outbox_idempotency_unique").on(
+      table.idempotencyKey,
+    ),
+  }),
+);
+
+export const publicationEvents = sqliteTable(
+  "publication_events",
+  {
+    id: text("id").primaryKey(),
+    targetPlatform: text("target_platform").notNull(),
+    outboxId: text("outbox_id"),
+    draftId: text("draft_id"),
+    slotId: text("slot_id"),
+    campaignId: text("campaign_id"),
+    angleId: text("angle_id"),
+    ctaId: text("cta_id"),
+    priceVariantId: text("price_variant_id"),
+    canaryGroup: text("canary_group"),
+    externalId: text("external_id"),
+    externalUrl: text("external_url"),
+    externalFingerprint: text("external_fingerprint").notNull(),
+    publishedAt: text("published_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    fingerprintUniq: uniqueIndex("publication_events_fingerprint_unique").on(
+      table.externalFingerprint,
+    ),
+  }),
+);
+
+export const decisionEvidence = sqliteTable("decision_evidence", {
+  id: text("id").primaryKey(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  decisionType: text("decision_type").notNull(),
+  evidenceJson: text("evidence_json").notNull(),
+  createdAt: text("created_at").notNull(),
 });
 
 export const heartbeatStates = sqliteTable("heartbeat_states", {
@@ -426,30 +785,21 @@ export const AGENT_STATUSES = [
   "paused",
 ] as const;
 
-export const PROPOSAL_PRIORITIES = [
-  "low",
-  "medium",
-  "high",
-  "critical",
-] as const;
-
-export const PROPOSAL_STATUSES = [
-  "pending",
-  "reviewing",
-  "approved",
-  "rejected",
-  "executed",
-] as const;
-export const PROPOSAL_STAGES = [
-  "leader_review",
-  "executive_review",
-  "human_review",
-  "approved",
-  "rejected",
-  "executed",
-] as const;
 
 export const BUDGET_PERIODS = ["heartbeat", "daily"] as const;
+export const RUNNER_HEALTH_STATUSES = [
+  "healthy",
+  "degraded",
+  "tripped",
+] as const;
+export const ROLLBACK_STATUSES = ["planned", "executed", "failed"] as const;
+export const OPERATIONS_MODES = [
+  "full_autonomy",
+  "threads_only",
+  "observe_only",
+  "safe_freeze",
+] as const;
+export const PATTERN_CHANNELS = ["threads", "note"] as const;
 
 export const KPI_PERIOD_TYPES = ["hourly", "daily", "weekly"] as const;
 
@@ -502,55 +852,6 @@ export const agentStates = sqliteTable("agent_states", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const proposals = sqliteTable(
-  "proposals",
-  {
-    id: text("id").primaryKey(),
-    agentId: text("agent_id").notNull(),
-    leaderAgentId: text("leader_agent_id"),
-    executiveAgentId: text("executive_agent_id"),
-    department: text("department").notNull(),
-    title: text("title").notNull(),
-    description: text("description").notNull(),
-    reason: text("reason").notNull(),
-    evidence: text("evidence").notNull(),
-    expectedEffect: text("expected_effect").notNull(),
-    risk: text("risk"),
-    priority: text("priority").notNull().default("medium"),
-    status: text("status").notNull().default("pending"),
-    currentStage: text("current_stage").notNull().default("human_review"),
-    currentApproverId: text("current_approver_id"),
-    reviewerNote: text("reviewer_note"),
-    reviewedAt: text("reviewed_at"),
-    executedAt: text("executed_at"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => ({
-    proposalStatusDepartmentIdx: index(
-      "proposals_status_department_created_idx",
-    ).on(table.status, table.department, table.createdAt),
-  }),
-);
-
-export const proposalEvents = sqliteTable(
-  "proposal_events",
-  {
-    id: text("id").primaryKey(),
-    proposalId: text("proposal_id").notNull(),
-    stage: text("stage").notNull(),
-    action: text("action").notNull(),
-    actorId: text("actor_id").notNull(),
-    note: text("note"),
-    metadataJson: text("metadata_json"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => ({
-    proposalCreatedIdx: index("proposal_events_proposal_created_idx").on(
-      table.proposalId,
-      table.createdAt,
-    ),
-  }),
-);
 
 export const budgetTracking = sqliteTable(
   "budget_tracking",
@@ -570,6 +871,73 @@ export const budgetTracking = sqliteTable(
     scopePeriodKeyUniq: uniqueIndex(
       "budget_tracking_scope_period_key_unique",
     ).on(table.scope, table.period, table.periodKey),
+  }),
+);
+
+export const runnerHealth = sqliteTable("runner_health", {
+  runner: text("runner").primaryKey(),
+  status: text("status").notNull().default("healthy"),
+  consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+  timeoutCount: integer("timeout_count").notNull().default(0),
+  invalidJsonCount: integer("invalid_json_count").notNull().default(0),
+  totalCalls: integer("total_calls").notNull().default(0),
+  lastModel: text("last_model"),
+  lastError: text("last_error"),
+  lastDurationMs: integer("last_duration_ms"),
+  lastSuccessAt: text("last_success_at"),
+  lastFailureAt: text("last_failure_at"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const runnerBudgets = sqliteTable(
+  "runner_budget",
+  {
+    id: text("id").primaryKey(),
+    runner: text("runner").notNull(),
+    periodKey: text("period_key").notNull(),
+    tokensUsed: integer("tokens_used").notNull().default(0),
+    callsUsed: integer("calls_used").notNull().default(0),
+    tokensLimit: integer("tokens_limit").notNull(),
+    callsLimit: integer("calls_limit").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    runnerPeriodUniq: uniqueIndex("runner_budget_runner_period_unique").on(
+      table.runner,
+      table.periodKey,
+    ),
+  }),
+);
+
+export const anomalyEvents = sqliteTable("anomaly_events", {
+  id: text("id").primaryKey(),
+  category: text("category").notNull(),
+  severity: text("severity").notNull(),
+  message: text("message").notNull(),
+  metadataJson: text("metadata_json"),
+  detectedAt: text("detected_at").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const rollbacks = sqliteTable(
+  "rollbacks",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull(),
+    trigger: text("trigger").notNull(),
+    reason: text("reason").notNull(),
+    previousStateJson: text("previous_state_json"),
+    appliedStateJson: text("applied_state_json"),
+    status: text("status").notNull().default("executed"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => ({
+    rollbackScopeCreatedIdx: index("rollbacks_scope_created_idx").on(
+      table.scope,
+      table.createdAt,
+    ),
   }),
 );
 
@@ -609,6 +977,16 @@ export const departmentSummaries = sqliteTable(
   }),
 );
 
+export const operationsModeState = sqliteTable("operations_mode_state", {
+  scope: text("scope").primaryKey(),
+  mode: text("mode").notNull().default("full_autonomy"),
+  reason: text("reason").notNull(),
+  evidenceJson: text("evidence_json"),
+  lastTransitionAt: text("last_transition_at").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const systemControls = sqliteTable(
   "system_controls",
   {
@@ -630,21 +1008,3 @@ export const systemControls = sqliteTable(
   }),
 );
 
-export const humanReviewItems = sqliteTable(
-  "human_review_items",
-  {
-    id: text("id").primaryKey(),
-    itemType: text("item_type").notNull(),
-    itemId: text("item_id").notNull(),
-    reason: text("reason").notNull(),
-    status: text("status").notNull().default("pending"),
-    reviewedAt: text("reviewed_at"),
-    reviewerNote: text("reviewer_note"),
-    createdAt: text("created_at").notNull(),
-  },
-  (table) => ({
-    itemTypeItemIdUniq: uniqueIndex(
-      "human_review_items_item_type_item_id_unique",
-    ).on(table.itemType, table.itemId),
-  }),
-);

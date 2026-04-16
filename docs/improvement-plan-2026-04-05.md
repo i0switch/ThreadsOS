@@ -106,7 +106,7 @@ ThreadsOS を回し始めた結果、理想の成果が得られていない。�
 - src/services/auto-publisher/index.ts
 - src/services/post-audit/index.ts
 - src/services/note-audit/index.ts
-- src/cli/review-approve.ts
+- src/services/proposal-flow/index.ts
 - src/db/schema.ts
 
 **対応内容**:
@@ -228,7 +228,7 @@ ThreadsOS を回し始めた結果、理想の成果が得られていない。�
 - src/db/schema.ts
 - src/services/post-audit/index.ts
 - src/services/note-audit/index.ts
-- src/cli/review-approve.ts
+- src/services/proposal-flow/index.ts
 
 **対応内容**:
 - 通常フローから human review を撤去する

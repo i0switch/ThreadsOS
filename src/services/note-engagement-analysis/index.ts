@@ -365,6 +365,14 @@ export class NoteEngagementAnalysisServiceImpl
             article.trafficSource ??
             targetRow?.trafficSource ??
             "threads");
+      const campaignId =
+        targetRow?.campaignId ?? matchedDraft?.campaignId ?? null;
+      const angleId = targetRow?.angleId ?? matchedDraft?.angleId ?? null;
+      const ctaId = targetRow?.ctaId ?? matchedDraft?.ctaId ?? null;
+      const priceVariantId =
+        targetRow?.priceVariantId ?? matchedDraft?.priceVariantId ?? null;
+      const canaryGroup =
+        targetRow?.canaryGroup ?? matchedDraft?.canaryGroup ?? null;
 
       if (targetRow) {
         db.update(notePostResults)
@@ -373,6 +381,11 @@ export class NoteEngagementAnalysisServiceImpl
             title: matchedDraft?.title ?? article.title,
             noteUrl: article.url,
             priceYen: normalized.priceYen,
+            campaignId,
+            angleId,
+            ctaId,
+            priceVariantId,
+            canaryGroup,
             views: stats.views,
             likes: stats.likes,
             commentsCount: stats.comments,
@@ -393,6 +406,11 @@ export class NoteEngagementAnalysisServiceImpl
             title: matchedDraft?.title ?? article.title,
             noteUrl: article.url,
             priceYen: normalized.priceYen,
+            campaignId,
+            angleId,
+            ctaId,
+            priceVariantId,
+            canaryGroup,
             views: stats.views,
             likes: stats.likes,
             commentsCount: stats.comments,

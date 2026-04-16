@@ -64,11 +64,14 @@ pnpm job:heartbeat:dry
 | `pnpm job:daily-topic-research` | デイリートピックリサーチ |
 | `pnpm job:daily-threads-plan` | デイリー Threads 投稿計画 |
 | `pnpm job:post-publish-followup` | 投稿後フォローアップ (エンゲージメント取得) |
+| `pnpm job:metrics-sync` | metrics 同期 + note session guard |
 | `pnpm job:nightly-note-pipeline` | ナイトリー note 記事パイプライン |
 | `pnpm job:weekly-retro` | 週次振り返り |
 | `pnpm job:llm-worker` | LLM タスクキューワーカー |
 | `pnpm job:refresh-token` | Threads トークン手動リフレッシュ |
 | `pnpm job:refresh-token:dry` | トークンリフレッシュ (ドライラン) |
+
+15 分 tier 実行では `metrics-sync` が自動的に呼ばれ、note session guard と note / Threads の指標同期が継続実行される。
 
 ### CLI
 
@@ -77,9 +80,6 @@ pnpm job:heartbeat:dry
 | `pnpm input:research` | リサーチ情報を投入 |
 | `pnpm input:feedback` | フィードバックを投入 |
 | `pnpm input:directive` | 運用指示を投入 |
-| `pnpm review:list` | 人間レビュー待ちアイテム一覧 |
-| `pnpm review:approve <id>` | レビューアイテムを承認 |
-| `pnpm review:reject <id>` | レビューアイテムを却下 |
 | `pnpm setup` | 初期セットアップ (DB + プロファイル) |
 | `pnpm note:login` | note.com セッション取得 (Playwright) |
 
@@ -98,15 +98,12 @@ pnpm dev
 # ブラウザで http://127.0.0.1:3000/ を開く
 ```
 
-ダッシュボードでは以下が確認・操作できる:
-- Threads/note のパフォーマンスサマリー (24h / 7d)
-- 部署別実行状況
-- エージェント状態・ロック状況
-- 提案の承認/却下
-- 人間レビュー待ちアイテムの処理
-- ジョブ実行ログ (ページネーション対応)
-- KPI スナップショット
-- システムの一時停止/再開・ディレクティブ投入
+ダッシュボードでは以下が確認できる:
+- operations mode と現在の bottleneck
+- runner / session / outbox の runtime health
+- anomaly / decision evidence / rollback の execution ledger
+- auditor の pass / rewrite / skip / quarantine 集計
+- contract compiler の agents / playbooks / policies サマリー
 
 本番運用では `.env` に `DASHBOARD_AUTH_TOKEN` を設定して、
 `Authorization: Bearer <token>` または `x-dashboard-token: <token>` を付けてアクセスする。
@@ -132,7 +129,7 @@ src/
     llm/               LLM クライアント (heartbeat / direct / dry-run)
     storage/           ファイルシステムストレージ
   app/               ロガー等の共通基盤
-  cli/               CLI コマンド (setup, review, input)
+  cli/               CLI コマンド (setup, input, note-login)
   config/            環境変数ロード (Zod バリデーション)
   dashboard/         Fastify ルート + 静的 HTML
   db/                SQLite スキーマ, ブートストラップ, 接続

@@ -4,8 +4,36 @@ const require = createRequire(
 );
 const { CopilotClient, approveAll } = require("@github/copilot-sdk");
 
-const [, , sessionId, ...promptParts] = process.argv;
-const prompt = promptParts.join(" ").trim();
+const [, , sessionId, ...cliArgs] = process.argv;
+
+function parseCliArgs(args) {
+  let model;
+  const promptParts = [];
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+
+    if (arg === "--model" || arg === "-m") {
+      model = args[index + 1];
+      index += 1;
+      continue;
+    }
+
+    if (arg.startsWith("--model=")) {
+      model = arg.slice("--model=".length);
+      continue;
+    }
+
+    promptParts.push(arg);
+  }
+
+  return {
+    prompt: promptParts.join(" ").trim(),
+    model,
+  };
+}
+
+const { prompt, model } = parseCliArgs(cliArgs);
 
 if (!sessionId || !prompt) {
   console.error("Usage: node scripts/copilot-chat.mjs <sessionId> <prompt>");
@@ -21,7 +49,7 @@ try {
 } catch {
   session = await client.createSession({
     sessionId,
-    model: "gpt-5.4",
+    model: model ?? "gpt-5.4",
     onPermissionRequest: approveAll,
   });
 }

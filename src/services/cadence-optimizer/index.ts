@@ -120,15 +120,19 @@ export class CadenceOptimizerServiceImpl implements CadenceOptimizerService {
   async analyzeOptimalTimes(channel = "threads"): Promise<TimeSlot[]> {
     const results =
       channel === "note"
-        ? db.select().from(notePostResults).all().map((result) => ({
-            publishedAt: result.publishedAt,
-            impressions: result.views,
-            likes: result.likes,
-            repliesCount: result.commentsCount,
-            shares:
-              result.purchasesCount * 5 +
-              Math.max(0, Math.floor(result.revenueYen / 100)),
-          }))
+        ? db
+            .select()
+            .from(notePostResults)
+            .all()
+            .map((result) => ({
+              publishedAt: result.publishedAt,
+              impressions: result.views,
+              likes: result.likes,
+              repliesCount: result.commentsCount,
+              shares:
+                result.purchasesCount * 5 +
+                Math.max(0, Math.floor(result.revenueYen / 100)),
+            }))
         : db.select().from(threadPostResults).all();
     const slots = new Map<string, { total: number; engagement: number }>();
 
@@ -240,8 +244,7 @@ ${resultLines}
         temperature: 0.3,
         tier: "premium",
       });
-      const parsed =
-        parseJsonObject<Partial<typeof fallback>>(raw);
+      const parsed = parseJsonObject<Partial<typeof fallback>>(raw);
       if (!parsed) {
         return JSON.stringify(fallback);
       }

@@ -35,16 +35,30 @@ describe("Server", () => {
   });
 
   it("serves the dashboard HTML from the production app wiring", async () => {
-    const app = await buildApp();
+    const app = await buildApp("secret-token");
 
     const response = await app.inject({
       method: "GET",
       url: "/",
+      headers: {
+        authorization: "Bearer secret-token",
+      },
     });
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
-    expect(response.body).toContain("<title>ThreadsOS</title>");
+    expect(response.body).toContain("<title>ThreadsOS Observation</title>");
+    await app.close();
+  });
+
+  it("returns 503 for dashboard routes when auth token is missing", async () => {
+    const app = await buildApp();
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/dashboard/observation",
+    });
+    expect(response.statusCode).toBe(503);
     await app.close();
   });
 
@@ -53,13 +67,13 @@ describe("Server", () => {
 
     const denied = await app.inject({
       method: "GET",
-      url: "/api/dashboard/summary",
+      url: "/api/dashboard/observation",
     });
     expect(denied.statusCode).toBe(401);
 
     const allowed = await app.inject({
       method: "GET",
-      url: "/api/dashboard/summary",
+      url: "/api/dashboard/observation",
       headers: {
         authorization: "Bearer secret-token",
       },
@@ -85,7 +99,7 @@ describe("Server", () => {
       },
     });
     expect(allowed.statusCode).toBe(200);
-    expect(allowed.body).toContain("<title>ThreadsOS</title>");
+    expect(allowed.body).toContain("<title>ThreadsOS Observation</title>");
     await app.close();
   });
 });

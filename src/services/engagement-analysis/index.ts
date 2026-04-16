@@ -5,8 +5,8 @@ import type { ThreadsApiClient } from "../../adapters/threads-api/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
 import {
+  anomalyEvents,
   channelPerformanceSnapshots,
-  humanReviewItems,
   improvementInsights,
   replyDecisions,
   strategyStates,
@@ -16,7 +16,7 @@ import {
   topics,
 } from "../../db/schema.js";
 import type { ImprovementInsight } from "../../domain/analytics/index.js";
-import { parseJsonArray, parseJsonObject } from "../../utils/llm-json.js";
+import { parseJsonArray } from "../../utils/llm-json.js";
 
 type PerformanceBucket = {
   posts: number;
@@ -437,12 +437,21 @@ export class EngagementAnalysisServiceImpl
 
     const id = randomUUID();
     const now = new Date().toISOString();
+    const draft = db
+      .select()
+      .from(threadPostDrafts)
+      .where(eq(threadPostDrafts.id, draftId))
+      .get();
 
     db.insert(threadPostResults)
       .values({
         id,
         draftId,
         threadsPostId,
+        campaignId: draft?.campaignId ?? null,
+        angleId: draft?.angleId ?? null,
+        ctaId: draft?.ctaId ?? null,
+        canaryGroup: draft?.canaryGroup ?? null,
         impressions: insights.impressions,
         likes: insights.likes,
         repliesCount: insights.replies,
@@ -492,8 +501,18 @@ export class EngagementAnalysisServiceImpl
       return;
     }
 
+    const draft = db
+      .select()
+      .from(threadPostDrafts)
+      .where(eq(threadPostDrafts.id, postResult.draftId))
+      .get();
+
     db.update(threadPostResults)
       .set({
+        campaignId: postResult.campaignId ?? draft?.campaignId ?? null,
+        angleId: postResult.angleId ?? draft?.angleId ?? null,
+        ctaId: postResult.ctaId ?? draft?.ctaId ?? null,
+        canaryGroup: postResult.canaryGroup ?? draft?.canaryGroup ?? null,
         impressions: insights.impressions,
         likes: insights.likes,
         repliesCount: insights.replies,
@@ -743,7 +762,7 @@ ${listSection}
 [
   {
     "threadsReplyId": "入力に対応するthreadsReplyId",
-    "decision": "safe_auto_reply" | "human_review" | "ignore",
+    "decision": "safe_auto_reply" | "quarantine" | "ignore",
     "sentiment": "positive" | "negative" | "neutral" | "question",
     "autoReplyBody": "返信文(safe_auto_replyの場合のみ)",
     "reason": "判定理由"
@@ -751,12 +770,12 @@ ${listSection}
 ]
 
 判定基準:
-- 攻撃的・挑発的 → human_review
-- 医療・法律・投資の質問 → human_review
+- 攻撃的・挑発的 → quarantine
+- 医療・法律・投資の質問 → quarantine
 - 好意的な感想 → safe_auto_reply
 - 質問 → safe_auto_reply (安全な範囲で)
 - スパム → ignore
-- ブランドポリシーに反する内容 → human_review
+- ブランドポリシーに反する内容 → quarantine
 
 必ず${batch.length}件全てに対して判定結果を返してください。JSON配列のみ、前置き・コードブロックなし。`;
 
@@ -783,7 +802,7 @@ ${listSection}
       const map = new Map<string, ReplyClassification>();
       if (arr) {
         for (const item of arr) {
-          if (item && item.threadsReplyId) {
+          if (item?.threadsReplyId) {
             map.set(item.threadsReplyId, item);
           }
         }
@@ -822,51 +841,29 @@ ${listSection}
             decision: classification.decision,
             autoReplyBody:
               classification.decision === "safe_auto_reply"
-                ? classification.autoReplyBody ?? null
+                ? (classification.autoReplyBody ?? null)
                 : null,
             createdAt: now,
           })
           .run();
 
-        if (classification.decision === "human_review") {
-          const existingReviewItem = db
-            .select()
-            .from(humanReviewItems)
-            .where(
-              and(
-                eq(humanReviewItems.itemType, "thread_reply"),
-                eq(humanReviewItems.itemId, replyId),
-              ),
-            )
-            .get();
-
-          if (existingReviewItem) {
-            db.update(humanReviewItems)
-              .set({
-                reason:
-                  classification.reason ??
-                  "LLM classified as requiring human review",
-                status: "pending",
-                reviewedAt: null,
-                reviewerNote: null,
-                createdAt: now,
-              })
-              .where(eq(humanReviewItems.id, existingReviewItem.id))
-              .run();
-          } else {
-            db.insert(humanReviewItems)
-              .values({
-                id: randomUUID(),
-                itemType: "thread_reply",
-                itemId: replyId,
-                reason:
-                  classification.reason ??
-                  "LLM classified as requiring human review",
-                status: "pending",
-                createdAt: now,
-              })
-              .run();
-          }
+        if (classification.decision === "quarantine") {
+          db.insert(anomalyEvents)
+            .values({
+              id: randomUUID(),
+              category: "reply_quarantine",
+              severity: "medium",
+              message:
+                classification.reason ?? "Reply quarantined by classifier",
+              metadataJson: JSON.stringify({
+                replyId,
+                threadsReplyId: reply.id,
+                author: reply.author,
+              }),
+              detectedAt: now,
+              createdAt: now,
+            })
+            .run();
         }
       }
     }
@@ -998,6 +995,10 @@ ${refreshed.summaryLines.map((line) => `- ${line}`).join("\n")}
 4. 来週の実験案
 5. 投稿時間・テーマ・フック・CTAの改善方針`;
 
-    return llm.generate(prompt, { temperature: 0.6, tier: "standard", label: "engagement-weekly-report" });
+    return llm.generate(prompt, {
+      temperature: 0.6,
+      tier: "standard",
+      label: "engagement-weekly-report",
+    });
   }
 }

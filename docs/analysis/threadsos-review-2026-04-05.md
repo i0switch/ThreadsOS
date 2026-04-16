@@ -19,11 +19,8 @@
 
 ## 重大な所見
 
-### 1. human review 承認後のドラフトが公開されない
-human review を承認すると、ドラフトの状態は approved に変わります。
-
-- [src/cli/review-approve.ts](src/cli/review-approve.ts#L37)
-- [src/cli/review-approve.ts](src/cli/review-approve.ts#L45)
+### 1. 旧 human review フローは observation-first / proposal flow に置き換わった
+旧 review CLI ベースの承認経路は retired。現行は proposal flow と observation dashboard を前提に運用する。
 
 一方で、公開スロット投入と自動公開は audited のドラフトしか扱いません。
 

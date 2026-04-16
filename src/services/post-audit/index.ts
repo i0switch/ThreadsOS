@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { LlmClient } from "../../adapters/llm/index.js";
 import { logger } from "../../app/logger.js";
 import { db } from "../../db/index.js";
-import {
-  humanReviewItems,
-  threadPostAudits,
-  threadPostDrafts,
-} from "../../db/schema.js";
+import { createRuntimeLedgerRepository } from "../../db/repositories/runtime-ledger.js";
+import { threadPostAudits, threadPostDrafts } from "../../db/schema.js";
 import type { ThreadPostAudit } from "../../domain/threads/index.js";
 import { parseJsonArray } from "../../utils/llm-json.js";
+import { normalizeAuditorAction } from "../auditor/index.js";
 import { ProfileContextServiceImpl } from "../profile-context/index.js";
 
 const AUDIT_BATCH_SIZE = 5;
@@ -38,6 +36,7 @@ export interface PostAuditService {
 
 export class PostAuditServiceImpl implements PostAuditService {
   private profileService = new ProfileContextServiceImpl();
+  private ledger = createRuntimeLedgerRepository();
 
   private buildCriteria(): string[] {
     const profile = this.profileService.getProfileContext();
@@ -60,7 +59,7 @@ export class PostAuditServiceImpl implements PostAuditService {
   private saveAuditResult(
     draftId: string,
     auditResult: {
-      verdict: "pass" | "revise" | "reject" | "human_review";
+      verdict: "pass" | "revise" | "reject";
       severity: "low" | "medium" | "high";
       reasons: string[];
       suggestions: string[];
@@ -70,25 +69,17 @@ export class PostAuditServiceImpl implements PostAuditService {
     const now = new Date().toISOString();
     const verdict = auditResult.verdict as ThreadPostAudit["verdict"];
     const severity = auditResult.severity as ThreadPostAudit["severity"];
+    const auditorAction = normalizeAuditorAction({
+      verdict,
+      severity,
+      score: auditResult.score,
+    });
     const existingAudit = db
       .select()
       .from(threadPostAudits)
       .where(eq(threadPostAudits.draftId, draftId))
       .get();
     const id = existingAudit?.id ?? randomUUID();
-    const needsReview =
-      severity === "high" || (verdict as string) === "human_review";
-    const reviewReason = auditResult.reasons.join("; ");
-    const existingReviewItem = db
-      .select()
-      .from(humanReviewItems)
-      .where(
-        and(
-          eq(humanReviewItems.itemType, "thread_draft"),
-          eq(humanReviewItems.itemId, draftId),
-        ),
-      )
-      .get();
 
     if (existingAudit) {
       db.update(threadPostAudits)
@@ -118,9 +109,9 @@ export class PostAuditServiceImpl implements PostAuditService {
     db.update(threadPostDrafts)
       .set({
         status:
-          verdict === "pass"
+          auditorAction === "pass"
             ? "audited"
-            : verdict === "reject"
+            : auditorAction === "skip"
               ? "rejected"
               : "draft",
         updatedAt: now,
@@ -128,42 +119,34 @@ export class PostAuditServiceImpl implements PostAuditService {
       .where(eq(threadPostDrafts.id, draftId))
       .run();
 
-    if (needsReview) {
-      if (existingReviewItem) {
-        db.update(humanReviewItems)
-          .set({
-            reason: reviewReason,
-            status: "pending",
-            reviewedAt: null,
-            reviewerNote: null,
-          })
-          .where(eq(humanReviewItems.id, existingReviewItem.id))
-          .run();
-      } else {
-        db.insert(humanReviewItems)
-          .values({
-            id: randomUUID(),
-            itemType: "thread_draft",
-            itemId: draftId,
-            reason: reviewReason,
-            status: "pending",
-            createdAt: now,
-          })
-          .run();
-      }
-      logger.warn({ draftId, severity }, "Draft sent to human review");
-    } else if (existingReviewItem && existingReviewItem.status === "pending") {
-      db.update(humanReviewItems)
-        .set({
-          status: "approved",
-          reviewedAt: now,
-          reviewerNote: "Auto-cleared after re-audit",
-        })
-        .where(eq(humanReviewItems.id, existingReviewItem.id))
-        .run();
+    this.ledger.recordDecisionEvidence({
+      entityType: "thread_draft",
+      entityId: draftId,
+      decisionType: `auditor_${auditorAction}`,
+      evidence: {
+        verdict,
+        severity,
+        score: auditResult.score,
+        reasons: auditResult.reasons,
+        suggestions: auditResult.suggestions,
+      },
+    });
+
+    if (auditorAction === "quarantine") {
+      this.ledger.recordAnomaly({
+        category: "auditor_quarantine",
+        severity: "high",
+        message: `Thread draft ${draftId} quarantined by auditor`,
+        metadata: {
+          draftId,
+          reasons: auditResult.reasons,
+          severity,
+        },
+      });
+      logger.warn({ draftId, severity }, "Draft quarantined by auditor");
     }
 
-    logger.info({ draftId, verdict, severity }, "Draft audited");
+    logger.info({ draftId, verdict, severity, auditorAction }, "Draft audited");
 
     return {
       id,
@@ -258,7 +241,7 @@ ${drafts
 [
   {
     "draftId": "draft-id",
-    "verdict": "pass" | "revise" | "reject" | "human_review",
+    "verdict": "pass" | "revise" | "reject",
     "severity": "low" | "medium" | "high",
     "reasons": ["理由1", "理由2"],
     "suggestions": ["改善案1", "改善案2"],
@@ -277,7 +260,7 @@ ${drafts
     const parsed =
       parseJsonArray<{
         draftId: string;
-        verdict: "pass" | "revise" | "reject" | "human_review";
+        verdict: "pass" | "revise" | "reject";
         severity: "low" | "medium" | "high";
         reasons: string[];
         suggestions: string[];

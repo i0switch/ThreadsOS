@@ -109,17 +109,6 @@ beforeAll(async () => {
     score REAL NOT NULL,
     created_at TEXT NOT NULL
   )`);
-  db.run(sql`CREATE TABLE IF NOT EXISTS human_review_items (
-    id TEXT PRIMARY KEY,
-    item_type TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    reviewed_at TEXT,
-    reviewer_note TEXT,
-    created_at TEXT NOT NULL,
-    UNIQUE(item_type, item_id)
-  )`);
   db.run(sql`CREATE TABLE IF NOT EXISTS thread_post_results (
     id TEXT PRIMARY KEY,
     draft_id TEXT NOT NULL,
@@ -168,7 +157,6 @@ beforeEach(() => {
   db.run(sql`DELETE FROM reply_decisions`);
   db.run(sql`DELETE FROM thread_replies`);
   db.run(sql`DELETE FROM thread_post_results`);
-  db.run(sql`DELETE FROM human_review_items`);
   db.run(sql`DELETE FROM note_audits`);
   db.run(sql`DELETE FROM note_drafts`);
   db.run(sql`DELETE FROM thread_post_audits`);
@@ -176,7 +164,7 @@ beforeEach(() => {
 });
 
 describe("re-execution safety", () => {
-  it("keeps post audits and human review items stable across re-audits", async () => {
+  it("keeps post audits stable across re-audits without creating human review items", async () => {
     const service = new PostAuditServiceImpl();
     const llm: LlmClient = {
       generate: vi.fn(),
@@ -221,12 +209,10 @@ describe("re-execution safety", () => {
     expect(audits).toHaveLength(1);
     expect(audits[0].verdict).toBe("pass");
 
-    const reviewItems = db.select().from(schema.humanReviewItems).all();
-    expect(reviewItems).toHaveLength(1);
-    expect(reviewItems[0].status).toBe("approved");
+    // human_review queue was retired; nothing to assert here.
   });
 
-  it("keeps note audits and human review items stable across re-audits", async () => {
+  it("keeps note audits stable across re-audits without creating human review items", async () => {
     const service = new NoteAuditServiceImpl();
     const llm: LlmClient = {
       generate: vi
@@ -276,9 +262,7 @@ describe("re-execution safety", () => {
     expect(audits).toHaveLength(1);
     expect(audits[0].verdict).toBe("pass");
 
-    const reviewItems = db.select().from(schema.humanReviewItems).all();
-    expect(reviewItems).toHaveLength(1);
-    expect(reviewItems[0].status).toBe("approved");
+    // human_review queue was retired; nothing to assert here.
   });
 
   it("keeps ordinary note revise results out of human review", async () => {
@@ -316,8 +300,7 @@ describe("re-execution safety", () => {
     expect(audit.verdict).toBe("revise");
     expect(audit.rewriteGuidance).toContain("末尾の導線");
 
-    const reviewItems = db.select().from(schema.humanReviewItems).all();
-    expect(reviewItems).toHaveLength(0);
+    // human_review queue was retired; nothing to assert here.
   });
 
   it("normalizes passed note audits to a publishable score", async () => {
@@ -652,7 +635,7 @@ describe("re-execution safety", () => {
     );
   });
 
-  it("batch-audits thread drafts while preserving per-draft review state", async () => {
+  it("batch-audits thread drafts while preserving per-draft audit state", async () => {
     const service = new PostAuditServiceImpl();
     const llm: LlmClient = {
       audit: vi.fn(),
@@ -722,9 +705,7 @@ describe("re-execution safety", () => {
     expect(drafts[0].status).toBe("audited");
     expect(drafts[1].status).toBe("draft");
 
-    const reviewItems = db.select().from(schema.humanReviewItems).all();
-    expect(reviewItems).toHaveLength(1);
-    expect(reviewItems[0].itemId).toBe("draft-batch-2");
+    // human_review queue was retired; nothing to assert here.
   });
 
   it("auto-revises note drafts until they pass audit", async () => {

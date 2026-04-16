@@ -14,7 +14,14 @@ export const researchItemSchema = z.object({
   topicId: z.string(),
   source: z.string(),
   content: z.string(),
-  evidenceType: z.enum(["data", "anecdote", "expert", "trend", "market", "genre_insight"]),
+  evidenceType: z.enum([
+    "data",
+    "anecdote",
+    "expert",
+    "trend",
+    "market",
+    "genre_insight",
+  ]),
   confidence: z.enum(["high", "medium", "low"]),
 });
 export type ResearchItem = z.infer<typeof researchItemSchema>;
@@ -33,7 +40,7 @@ export type ThreadPostDraft = z.infer<typeof threadPostDraftSchema>;
 export const threadPostAuditSchema = z.object({
   id: z.string(),
   draftId: z.string(),
-  verdict: z.enum(["pass", "revise", "reject", "human_review"]),
+  verdict: z.enum(["pass", "revise", "reject"]),
   severity: z.enum(["low", "medium", "high"]),
   reasons: z.array(z.string()),
   suggestions: z.array(z.string()),

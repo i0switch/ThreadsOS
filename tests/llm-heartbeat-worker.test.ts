@@ -29,7 +29,7 @@ describe("llm-heartbeat-worker helpers", () => {
     expect(args).toEqual([
       "--print",
       "--output-format",
-      "text",
+      "json",
       "--model",
       "opus",
       "--system-prompt",
@@ -56,7 +56,7 @@ describe("llm-heartbeat-worker helpers", () => {
     expect(args).toEqual([
       "--print",
       "--output-format",
-      "text",
+      "json",
       "--model",
       "haiku-custom",
     ]);

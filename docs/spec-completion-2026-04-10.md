@@ -35,7 +35,7 @@
 ### 5. 分析、改善、ダッシュボード
 
 - Threads / note のエンゲージメント分析と改善示唆生成は [src/services/engagement-analysis/index.ts](src/services/engagement-analysis/index.ts) と [src/services/note-engagement-analysis/index.ts](src/services/note-engagement-analysis/index.ts) に実装。
-- ダッシュボード API は [src/dashboard/routes.ts](src/dashboard/routes.ts) に、集計クエリは [src/services/dashboard-query/index.ts](src/services/dashboard-query/index.ts) に実装。
+- ダッシュボード API は [src/dashboard/routes.ts](src/dashboard/routes.ts) に、observation 集約は [src/services/dashboard-observation/index.ts](src/services/dashboard-observation/index.ts) に実装。
 - ダッシュボード UI は [src/dashboard/public/index.html](src/dashboard/public/index.html) に実装。
 - 本番相当のサーバー配線は [src/server/app.ts](src/server/app.ts) と [src/server/index.ts](src/server/index.ts) で共有化し、テスト対象にした。
 
@@ -57,7 +57,6 @@
 - `pnpm job:nightly-note-pipeline -- --dry-run`
 - `pnpm job:weekly-retro -- --dry-run`
 - `pnpm job:post-publish-followup -- --dry-run`
-- `pnpm review:list`
 - ダッシュボードの `/health` と `/` が 200 を返すことを確認
 
 ## Notes

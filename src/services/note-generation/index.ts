@@ -236,7 +236,11 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrieval
 
 マークダウン形式で返してください。`;
 
-    return llm.generate(prompt, { temperature: 0.6, tier: "standard", label: "note-outline-generation" });
+    return llm.generate(prompt, {
+      temperature: 0.6,
+      tier: "standard",
+      label: "note-outline-generation",
+    });
   }
 
   async generateDraft(
@@ -297,8 +301,16 @@ ${competitorContext ? `## 競合メモ\n${competitorContext}\n` : ""}${retrieval
 
 CTAのテキストのみ返してください。`;
     const [body, cta] = await Promise.all([
-      llm.generate(prompt, { temperature: 0.7, tier: "standard", label: "note-body-generation" }),
-      llm.generate(ctaPrompt, { temperature: 0.5, tier: "fast", label: "note-cta-generation" }),
+      llm.generate(prompt, {
+        temperature: 0.7,
+        tier: "standard",
+        label: "note-body-generation",
+      }),
+      llm.generate(ctaPrompt, {
+        temperature: 0.5,
+        tier: "fast",
+        label: "note-cta-generation",
+      }),
     ]);
 
     const id = randomUUID();

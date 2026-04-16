@@ -192,7 +192,7 @@ src/
 │   ├── threads/    # Topic, PostDraft, PostAudit, PostResult, Reply
 │   ├── note/       # NoteIdea, NoteDraft, NoteAudit
 │   ├── analytics/  # ImprovementInsight, CompetitorSnapshot
-│   ├── review/     # ReplyDecision, HumanReviewItem, ScheduledJobRun
+│   ├── review/     # ReplyDecision, ScheduledJobRun, proposal-related flows
 │   └── department/ # DepartmentName, HeartbeatObjective, FunnelStage
 ├── adapters/       # 外部接続（8アダプタ）
 │   ├── threads-api/   # Threads Graph API
@@ -207,7 +207,7 @@ src/
 ├── config/         # 環境変数（Zod validated）
 ├── app/            # ロガー・エラー
 ├── server/         # Fastify（/health のみ）
-├── cli/            # review-approve CLI
+├── cli/            # setup / input / note-login CLI
 └── utils/          # JSON パーサー等
 ```
 
@@ -549,7 +549,7 @@ graph LR
 | 運用 | strategy_states | 戦略状態 |
 | 運用 | executive_cycles | エグゼクティブサイクル |
 | 運用 | department_runs | 部署実行ログ |
-| 運用 | human_review_items | 人間レビュー |
+| 運用 | proposals | 提案と承認フロー |
 | 基盤 | heartbeat_states | ハートビート状態 |
 | 基盤 | scheduled_job_runs | ジョブ実行ログ |
 | 基盤 | outbound_notifications | 送信通知 |

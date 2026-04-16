@@ -336,11 +336,18 @@ ${topicName}
       .all();
 
     if (snapshots.length === 0) {
-      return { analysisCount: 0, winningPatterns: [], summary: "競合スナップショットなし" };
+      return {
+        analysisCount: 0,
+        winningPatterns: [],
+        summary: "競合スナップショットなし",
+      };
     }
 
     const snapshotSummary = snapshots
-      .map((s, i) => `[${i + 1}] source: ${s.source}\ndata: ${s.data.slice(0, 500)}`)
+      .map(
+        (s, i) =>
+          `[${i + 1}] source: ${s.source}\ndata: ${s.data.slice(0, 500)}`,
+      )
       .join("\n\n");
 
     const prompt = `以下の競合スナップショットを分析してください。
@@ -369,12 +376,20 @@ ${snapshotSummary}
       themes: string[];
       hooks: string[];
       engagementPatterns: string;
-      winningPatterns: Array<{ pattern: string; frequency: string; estimatedEngagement: string }>;
+      winningPatterns: Array<{
+        pattern: string;
+        frequency: string;
+        estimatedEngagement: string;
+      }>;
     }>(raw);
 
     if (!parsed) {
       logger.warn("Failed to parse competitor analysis");
-      return { analysisCount: 0, winningPatterns: [], summary: "分析パース失敗" };
+      return {
+        analysisCount: 0,
+        winningPatterns: [],
+        summary: "分析パース失敗",
+      };
     }
 
     // Save each analysis

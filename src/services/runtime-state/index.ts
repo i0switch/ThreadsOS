@@ -1,6 +1,6 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
-import { agentStates, proposals } from "../../db/schema.js";
+import { agentStates } from "../../db/schema.js";
 import type { ActionType } from "../content-scheduler/index.js";
 
 export type AgentStatus =
@@ -301,22 +301,6 @@ export function createRuntimeStateService(): RuntimeStateService {
       )
       .run();
 
-    // Clean up orphaned proposals pointing to deleted approvers
-    // (Executive自律承認が有効なため、executive-director以外の承認待ちは全てorphan)
-    db.update(proposals)
-      .set({
-        status: "rejected",
-        currentStage: "rejected",
-        reviewerNote: "Auto-rejected: approver no longer exists (Executive自律承認に移行済み)",
-        reviewedAt: new Date().toISOString(),
-      })
-      .where(
-        and(
-          eq(proposals.status, "pending"),
-          sql`${proposals.currentApproverId} NOT IN ('executive-director', 'dashboard-human')`,
-        ),
-      )
-      .run();
   }
 
   function startAction(actionType: ActionType, task: string) {
@@ -352,7 +336,7 @@ export function createRuntimeStateService(): RuntimeStateService {
     setStatus(
       executive,
       "awaiting_approval",
-      `${leader?.name ?? worker.name} の提案を人間レビューへ送るか確認中`,
+      `${leader?.name ?? worker.name} の提案をExecutiveが自律判断中`,
     );
     return {
       workerId: worker.id,

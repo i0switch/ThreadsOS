@@ -3,447 +3,578 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ThreadsOS</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>ThreadsOS Observation</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="icon" href="data:," />
   <style>
-    :root{color-scheme:light}
-    html{font-family:"IBM Plex Sans JP","Hiragino Sans",sans-serif;background:#eef4f9}
-    body{margin:0;min-height:100vh;color:#11263d;background:radial-gradient(circle at top left,rgba(15,118,110,.08),transparent 24%),radial-gradient(circle at bottom right,rgba(234,88,12,.08),transparent 22%),linear-gradient(180deg,#f7fafc 0%,#eef4f9 48%,#e7eef7 100%)}
-    .font-space{font-family:"Space Grotesk",sans-serif}
-    .glass{background:rgba(255,255,255,.86);backdrop-filter:blur(18px)}
-    .grid-overlay{position:absolute;inset:0;background-image:linear-gradient(rgba(148,163,184,.1) 1px,transparent 1px),linear-gradient(90deg,rgba(148,163,184,.1) 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(180deg,rgba(0,0,0,.35),transparent 94%);pointer-events:none}
-    .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.4rem .75rem;border-radius:999px;font-size:.73rem;font-weight:700;border:1px solid transparent}
-    .chip-neutral{background:rgba(148,163,184,.14);color:#47617d;border-color:rgba(148,163,184,.18)}
-    .chip-good{background:rgba(16,185,129,.12);color:#047857;border-color:rgba(16,185,129,.18)}
-    .chip-warn{background:rgba(245,158,11,.12);color:#b7791f;border-color:rgba(245,158,11,.18)}
-    .chip-bad{background:rgba(239,68,68,.1);color:#b91c1c;border-color:rgba(239,68,68,.18)}
-    .chip-accent{background:rgba(15,118,110,.11);color:#0f766e;border-color:rgba(15,118,110,.16)}
-    .loading{color:#64748b;font-size:.92rem;line-height:1.8}
-    details.fold{border:1px solid rgba(226,232,240,.95);border-radius:18px;background:rgba(248,250,252,.92);padding:0 1rem}
-    details.fold summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.95rem 0;font-size:.88rem;font-weight:700;color:#0f172a}
-    details.fold summary::-webkit-details-marker{display:none}
-    details.fold summary::after{content:"詳細を開く";font-size:.76rem;font-weight:700;color:#0f766e}
-    details.fold[open] summary::after{content:"詳細を閉じる"}
-    details.fold .fold-body{padding:0 0 1rem}
-    .kpi-card{display:flex;flex-direction:column;gap:.25rem;padding:1.25rem 1.5rem;border-radius:22px;border:1px solid rgba(226,232,240,.95);background:rgba(255,255,255,.92)}
-    .kpi-val{font-family:"Space Grotesk",sans-serif;font-size:2rem;font-weight:700;line-height:1.1;letter-spacing:-0.03em}
-    .kpi-label{font-size:.78rem;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.12em}
-    .post-row{padding:.75rem 1rem;border-radius:14px;border:1px solid rgba(226,232,240,.8);background:rgba(255,255,255,.8);transition:border-color .12s}
-    .post-row:hover{border-color:rgba(15,118,110,.2)}
-    .post-best{border-color:rgba(245,158,11,.35);background:linear-gradient(135deg,rgba(254,243,199,.3),rgba(255,255,255,.85))}
-    .hb-run{padding:.5rem .75rem;border-radius:10px;background:rgba(248,250,252,.9);border:1px solid rgba(226,232,240,.7);font-size:.82rem}
-    .err-banner{padding:.75rem 1rem;border-radius:14px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);color:#b91c1c;font-size:.85rem;font-weight:600}
-    .funnel-line{padding:.6rem 1rem;border-radius:12px;background:rgba(15,118,110,.06);border:1px solid rgba(15,118,110,.12);font-size:.85rem;font-weight:600;color:#0f766e}
-    .funnel-warn{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.2);color:#b7791f}
+    :root {
+      color-scheme: light;
+      --bg: #f4f0e8;
+      --panel: rgba(255, 251, 244, 0.92);
+      --panel-strong: rgba(255, 248, 236, 0.98);
+      --line: rgba(84, 66, 48, 0.14);
+      --text: #1e1a16;
+      --muted: #6d6458;
+      --good: #1f7a4f;
+      --warn: #b06a19;
+      --bad: #b43b2b;
+      --accent: #0b6e72;
+      --ink: #0f172a;
+    }
+
+    * { box-sizing: border-box; }
+    html {
+      font-family: "IBM Plex Sans JP", "Hiragino Sans", sans-serif;
+      background:
+        radial-gradient(circle at 15% 10%, rgba(11, 110, 114, 0.08), transparent 20%),
+        radial-gradient(circle at 88% 18%, rgba(176, 106, 25, 0.1), transparent 24%),
+        linear-gradient(180deg, #fcfaf5 0%, #f4f0e8 55%, #ece4d7 100%);
+      min-height: 100%;
+    }
+    body {
+      margin: 0;
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .wrap {
+      width: min(1180px, calc(100vw - 24px));
+      margin: 0 auto;
+      padding: 22px 0 40px;
+    }
+    .hero {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1.4fr 1fr;
+      align-items: stretch;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      box-shadow: 0 18px 40px rgba(61, 48, 31, 0.09);
+      backdrop-filter: blur(18px);
+      margin-top: 16px;
+    }
+    .panel:first-of-type,
+    .hero .panel {
+      margin-top: 0;
+    }
+    .panel-strong {
+      background: var(--panel-strong);
+    }
+    .panel-body {
+      padding: 22px;
+    }
+    .eyebrow {
+      font-size: 11px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .title {
+      font-family: "Space Grotesk", sans-serif;
+      font-size: clamp(32px, 4.8vw, 54px);
+      line-height: 0.95;
+      letter-spacing: -0.05em;
+      margin: 6px 0 10px;
+    }
+    .headline {
+      font-family: "Space Grotesk", sans-serif;
+      font-size: 26px;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      margin: 0;
+    }
+    .subtle {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+    .chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border-radius: 999px;
+      padding: 9px 14px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+    .metric-card {
+      border-radius: 20px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.74);
+      padding: 16px;
+      min-height: 120px;
+    }
+    .metric-label {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .metric-value {
+      font-family: "Space Grotesk", sans-serif;
+      font-size: 28px;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      margin: 10px 0 8px;
+    }
+    .metric-context {
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--muted);
+    }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    .section-title h2 {
+      font-family: "Space Grotesk", sans-serif;
+      font-size: 23px;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      margin: 0;
+    }
+    .section-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .dense-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+    .contract-grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: 1.2fr 1fr 1fr;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+    .item {
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .item-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 6px;
+    }
+    .item-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--ink);
+    }
+    .item-meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .item-copy {
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 94px;
+      border-radius: 999px;
+      padding: 7px 12px;
+      border: 1px solid currentColor;
+      font-size: 12px;
+      font-weight: 700;
+      background: rgba(255, 255, 255, 0.72);
+    }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .accent { color: var(--accent); }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+      padding: 18px;
+      border: 1px dashed var(--line);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.4);
+    }
+    .footer-note {
+      margin-top: 18px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    #errorBox {
+      display: none;
+      margin-bottom: 16px;
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(180, 59, 43, 0.22);
+      background: rgba(180, 59, 43, 0.08);
+      color: var(--bad);
+      font-size: 14px;
+      font-weight: 700;
+    }
+    @media (max-width: 980px) {
+      .hero,
+      .section-grid,
+      .dense-grid,
+      .contract-grid,
+      .metric-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 <body>
-  <div class="relative min-h-screen overflow-x-clip">
-    <div class="grid-overlay"></div>
-    <div class="relative z-10 mx-auto max-w-[960px] p-4 md:p-6 space-y-5">
+  <div class="wrap">
+    <div id="errorBox"></div>
 
-      <!-- 1. Header -->
-      <header class="glass rounded-[28px] border border-slate-200/80 shadow-[0_20px_48px_rgba(15,23,42,.08)] p-5 md:p-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 class="font-space text-3xl md:text-4xl font-bold leading-none tracking-[-0.04em]">ThreadsOS</h1>
-          <p class="mt-1 text-sm text-slate-500" id="headerSub">読み込み中...</p>
+    <section class="hero">
+      <article class="panel panel-strong">
+        <div class="panel-body">
+          <div class="eyebrow">Observation-First</div>
+          <h1 class="title">ThreadsOS</h1>
+          <p class="subtle" id="heroReason">観測データを読み込み中...</p>
+          <div class="chip-row" id="heroChips"></div>
+          <div class="metric-grid" id="bottleneckMetrics"></div>
         </div>
-        <span class="chip chip-neutral text-xs" id="lastUpdated">最終更新: --</span>
-      </header>
+      </article>
 
-      <!-- Error banner area -->
-      <div id="errArea"></div>
-
-      <!-- 2. KPI -->
-      <section class="glass rounded-[28px] border border-emerald-200/60 shadow-[0_20px_48px_rgba(15,23,42,.08)] p-5 md:p-6">
-        <div class="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">成果サマリ (7日)</div>
-        <div id="kpiCards" class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div class="kpi-card"><span class="kpi-val">--</span><span class="kpi-label">Threads投稿</span></div>
-          <div class="kpi-card"><span class="kpi-val">--</span><span class="kpi-label">表示数</span></div>
-          <div class="kpi-card"><span class="kpi-val">--</span><span class="kpi-label">note公開</span></div>
-          <div class="kpi-card"><span class="kpi-val">--</span><span class="kpi-label">売上</span></div>
+      <article class="panel">
+        <div class="panel-body">
+          <div class="eyebrow">Current State</div>
+          <h2 class="headline" id="modeLabel">--</h2>
+          <p class="subtle" id="modeReason">状態を評価中...</p>
+          <div class="chip-row" id="metaChips"></div>
+          <div class="footer-note" id="lastUpdated">最終更新: --</div>
         </div>
-        <div id="funnelLine" class="mt-4"></div>
-      </section>
+      </article>
+    </section>
 
-      <!-- 3. Threads Recent Posts -->
-      <section class="glass rounded-[28px] border border-slate-200/80 shadow-[0_20px_48px_rgba(15,23,42,.08)] p-5 md:p-6">
-        <div class="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">Threads最新投稿</div>
-        <h2 class="font-space mt-2 text-xl font-bold tracking-[-0.03em]">直近の投稿 (10件)</h2>
-        <div id="postsSection" class="mt-4 loading">読み込み中...</div>
-      </section>
+    <section class="panel">
+      <div class="panel-body">
+        <div class="section-title">
+          <h2>Runtime Health</h2>
+          <span class="eyebrow">runner / session / outbox</span>
+        </div>
+        <div class="section-grid">
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Runner Health</div>
+            <div class="list" id="runnerHealth"></div>
+          </div>
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Session Health</div>
+            <div class="list" id="sessionHealth"></div>
+          </div>
+        </div>
+      </div>
+    </section>
 
-      <!-- 4. note Articles -->
-      <section class="glass rounded-[28px] border border-slate-200/80 shadow-[0_20px_48px_rgba(15,23,42,.08)] p-5 md:p-6">
-        <div class="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">note記事</div>
-        <h2 class="font-space mt-2 text-xl font-bold tracking-[-0.03em]">公開済み + 下書き</h2>
-        <div id="notesSection" class="mt-4 loading">読み込み中...</div>
-      </section>
+    <section class="panel">
+      <div class="panel-body">
+        <div class="section-title">
+          <h2>Execution Ledger</h2>
+          <span class="eyebrow">outbox / anomaly / evidence / rollback</span>
+        </div>
+        <div class="dense-grid">
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Outbox</div>
+            <div class="chip-row" id="outboxCounts"></div>
+            <div class="list" id="outboxItems" style="margin-top:12px;"></div>
+          </div>
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Anomalies</div>
+            <div class="list" id="anomalies"></div>
+          </div>
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Rollbacks</div>
+            <div class="list" id="rollbacks"></div>
+          </div>
+        </div>
+        <div style="margin-top:16px;">
+          <div class="eyebrow" style="margin-bottom:10px;">Decision Evidence</div>
+          <div class="list" id="decisionEvidence"></div>
+        </div>
+      </div>
+    </section>
 
-      <!-- 5. Heartbeat History -->
-      <section class="glass rounded-[28px] border border-slate-200/80 shadow-[0_20px_48px_rgba(15,23,42,.08)] p-5 md:p-6">
-        <div class="text-[11px] font-bold uppercase tracking-[0.22em] text-slate-500">ハートビート履歴</div>
-        <h2 class="font-space mt-2 text-xl font-bold tracking-[-0.03em]">直近10回</h2>
-        <div id="historySection" class="mt-4 loading">読み込み中...</div>
-      </section>
+    <section class="panel">
+      <div class="panel-body">
+        <div class="section-title">
+          <h2>Auditor</h2>
+          <span class="eyebrow">pass / rewrite / skip / quarantine</span>
+        </div>
+        <div class="chip-row" id="auditorCounts"></div>
+        <div class="list" id="auditorItems" style="margin-top:12px;"></div>
+      </div>
+    </section>
 
-      <!-- 6. Engagement Details (collapsed) -->
-      <section class="glass rounded-[28px] border border-slate-200/80 shadow-[0_20px_48px_rgba(15,23,42,.08)] p-5 md:p-6">
-        <details class="fold">
-          <summary>エンゲージメント詳細</summary>
-          <div class="fold-body" id="engagementSection">読み込み中...</div>
-        </details>
-      </section>
-
-    </div>
+    <section class="panel">
+      <div class="panel-body">
+        <div class="section-title">
+          <h2>Contracts</h2>
+          <span class="eyebrow">agents / playbooks / policies</span>
+        </div>
+        <div class="chip-row" id="contractSummary"></div>
+        <div class="contract-grid" style="margin-top:12px;">
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Agents</div>
+            <div class="list" id="contractAgents"></div>
+          </div>
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Playbooks</div>
+            <div class="list" id="contractPlaybooks"></div>
+          </div>
+          <div>
+            <div class="eyebrow" style="margin-bottom:10px;">Policies</div>
+            <div class="list" id="contractPolicies"></div>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <script>
-    /* ── State ── */
-    const state = { summary: null, home: null, posts: null, notes: null, history: null, errors: {} };
-
-    /* ── Sources ── */
-    const sources = {
-      summary:  { url: "/api/dashboard/summary",            interval: 60000 },
-      home:     { url: "/api/dashboard/home",                interval: 60000 },
-      posts:    { url: "/api/dashboard/recent-posts",        interval: 60000 },
-      notes:    { url: "/api/dashboard/recent-notes",        interval: 60000 },
-      history:  { url: "/api/dashboard/heartbeat-history",   interval: 90000 },
+    const $ = (id) => document.getElementById(id);
+    const esc = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+    const fd = (value) => {
+      if (!value) return "--";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? "--" : date.toLocaleString("ja-JP");
     };
 
-    /* ── Utils ── */
-    const $ = id => document.getElementById(id);
-    const esc = v => String(v ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
-    const fd = (v, f = "-") => { if (!v) return f; const d = new Date(v); return Number.isNaN(d.getTime()) ? f : d.toLocaleString("ja-JP"); };
-    const fn = (v, f = "-") => { const n = Number(v); return Number.isFinite(n) ? n.toLocaleString("ja-JP") : f; };
-    const trunc = (s, len = 80) => { const t = String(s ?? ""); return t.length > len ? t.slice(0, len) + "\u2026" : t; };
-
-    /* ── Humanize funnel preview ── */
-    function humanizeFunnel(fp) {
-      const tm = fp.threadsAction?.match(/(\d+)件.*?(\d+)件.*?通過.*?(\d+)件.*?公開/);
-      const threads = tm ? `${tm[1]}件作って${tm[3]}件公開した` : (fp.threadsAction || "-");
-
-      const nm = fp.noteAction?.match(/(\d+)件.*?作成.*?(\d+)件.*?公開/);
-      const note = nm
-        ? (Number(nm[2]) > 0 ? `${nm[2]}件公開した` : `下書き${nm[1]}件。まだ公開できてない`)
-        : (fp.noteAction || "-");
-
-      const blocker = fp.blocker
-        ?.replace(/自動処理停止/g, '処理の停滞')
-        ?.replace(/が残っている/g, 'がある') ?? null;
-
-      return { threads, note, blocker };
+    function toneClass(value) {
+      const normalized = String(value ?? "").toLowerCase();
+      if (["healthy", "full_autonomy", "pass", "approved", "completed", "executed"].includes(normalized)) return "good";
+      if (["degraded", "warning", "rewrite", "observe_only", "threads_only", "processing", "pending"].includes(normalized)) return "warn";
+      if (["tripped", "quarantine", "failed", "safe_freeze", "rejected", "skip", "high"].includes(normalized)) return "bad";
+      return "accent";
     }
 
-    /* ── Fetch with error handling ── */
-    async function jfetch(url) {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      return r.json();
+    function empty(text) {
+      return `<div class="empty">${esc(text)}</div>`;
     }
 
-    /* ── Data loader ── */
-    const lastFetch = {};
-    async function load(name, force = false) {
-      const src = sources[name];
-      if (!src) return;
-      const now = Date.now();
-      if (!force && lastFetch[name] && (now - lastFetch[name] < src.interval)) return;
+    function itemBlock(title, meta, copy, tone = "accent") {
+      return `<div class="item">
+        <div class="item-head">
+          <div class="item-title">${esc(title)}</div>
+          <span class="status ${toneClass(tone)}">${esc(meta)}</span>
+        </div>
+        <div class="item-copy">${esc(copy)}</div>
+      </div>`;
+    }
+
+    async function loadObservation() {
+      const response = await fetch("/api/dashboard/observation");
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    }
+
+    function renderHero(data) {
+      $("heroReason").textContent = `${data.bottleneck.label}: ${data.bottleneck.reason}`;
+      $("modeLabel").textContent = data.mode.label;
+      $("modeReason").textContent = data.mode.reason;
+      $("lastUpdated").textContent = `最終更新: ${fd(data.generatedAt)}`;
+
+      $("heroChips").innerHTML = [
+        `<span class="chip ${toneClass(data.mode.current)}">Mode ${esc(data.mode.current)}</span>`,
+        `<span class="chip ${toneClass(data.bottleneck.stage ? "rewrite" : "degraded")}">Bottleneck ${esc(data.bottleneck.label)}</span>`,
+        `<span class="chip accent">Snapshot ${esc(fd(data.bottleneck.snapshotAt))}</span>`
+      ].join("");
+
+      $("metaChips").innerHTML = [
+        `<span class="chip ${toneClass(data.mode.current)}">${esc(data.mode.label)}</span>`,
+        `<span class="chip accent">Contracts ${esc(data.contracts.summary.agents + data.contracts.summary.playbooks + data.contracts.summary.policies)}</span>`,
+        `<span class="chip accent">Compiled ${esc(fd(data.contracts.compiledAt))}</span>`
+      ].join("");
+
+      $("bottleneckMetrics").innerHTML = (data.bottleneck.metrics ?? []).length
+        ? data.bottleneck.metrics.map((metric) => `
+            <div class="metric-card">
+              <div class="metric-label">${esc(metric.label)}</div>
+              <div class="metric-value">${esc(metric.value)}</div>
+              <div class="metric-context">${esc(metric.context)}</div>
+            </div>
+          `).join("")
+        : empty("funnel snapshot がまだありません");
+    }
+
+    function renderRunnerHealth(data) {
+      $("runnerHealth").innerHTML = data.runnerHealth.length
+        ? data.runnerHealth.map((runner) => itemBlock(
+            `${runner.runner} / ${runner.lastModel ?? "model n/a"}`,
+            runner.status,
+            `fails=${runner.consecutiveFailures}, calls=${runner.totalCalls}, budget=${runner.budget ? `${runner.budget.callsUsed}/${runner.budget.callsLimit}` : "n/a"}`,
+            runner.status,
+          )).join("")
+        : empty("runner health の記録がありません");
+    }
+
+    function renderSessionHealth(data) {
+      $("sessionHealth").innerHTML = data.sessionHealth.length
+        ? data.sessionHealth.map((session) => itemBlock(
+            `${session.scope} / ${session.provider}`,
+            session.state,
+            `${session.detail ?? "detailなし"} / success=${fd(session.lastSuccessAt)} / failure=${fd(session.lastFailureAt)}`,
+            session.state,
+          )).join("")
+        : empty("session health の記録がありません");
+    }
+
+    function renderLedger(data) {
+      const countEntries = Object.entries(data.outbox.counts ?? {});
+      $("outboxCounts").innerHTML = countEntries.length
+        ? countEntries.map(([key, value]) => `<span class="chip ${toneClass(key)}">${esc(key)} ${esc(value)}</span>`).join("")
+        : `<span class="chip accent">outbox 0</span>`;
+
+      $("outboxItems").innerHTML = data.outbox.items.length
+        ? data.outbox.items.map((item) => itemBlock(
+            `${item.targetPlatform} / ${item.operationType}`,
+            item.status,
+            `attempts=${item.attempts} / ${item.lastError ?? "errorなし"} / ${fd(item.updatedAt)}`,
+            item.status,
+          )).join("")
+        : empty("pending outbox はありません");
+
+      $("anomalies").innerHTML = data.anomalies.length
+        ? data.anomalies.map((item) => itemBlock(
+            item.category,
+            item.severity,
+            `${item.message} / ${fd(item.detectedAt)}`,
+            item.severity,
+          )).join("")
+        : empty("anomaly は記録されていません");
+
+      $("rollbacks").innerHTML = data.rollbacks.length
+        ? data.rollbacks.map((item) => itemBlock(
+            `${item.scope} / ${item.trigger}`,
+            item.status,
+            `${item.reason} / ${fd(item.createdAt)}`,
+            item.status,
+          )).join("")
+        : empty("rollback history はまだありません");
+
+      $("decisionEvidence").innerHTML = data.decisionEvidence.length
+        ? data.decisionEvidence.map((item) => `
+            <div class="item">
+              <div class="item-head">
+                <div class="item-title">${esc(item.entityType)} / ${esc(item.decisionType)}</div>
+                <span class="item-meta mono">${esc(fd(item.createdAt))}</span>
+              </div>
+              <div class="item-copy mono">${esc(item.entityId)} :: ${esc(item.summary)}</div>
+            </div>
+          `).join("")
+        : empty("decision evidence はまだありません");
+    }
+
+    function renderAuditor(data) {
+      const counts = data.auditor.counts;
+      $("auditorCounts").innerHTML = ["pass", "rewrite", "skip", "quarantine"].map((key) =>
+        `<span class="chip ${toneClass(key)}">${esc(key)} ${esc(counts[key] ?? 0)}</span>`
+      ).join("");
+
+      $("auditorItems").innerHTML = data.auditor.items.length
+        ? data.auditor.items.map((item) => itemBlock(
+            `${item.subjectType} / ${item.subjectId}`,
+            item.action,
+            `${item.reason} / source=${item.source} / ${fd(item.createdAt)}`,
+            item.action,
+          )).join("")
+        : empty("auditor の新しい記録はありません");
+    }
+
+    function renderContracts(data) {
+      $("contractSummary").innerHTML = [
+        `<span class="chip accent">agents ${esc(data.contracts.summary.agents)}</span>`,
+        `<span class="chip accent">playbooks ${esc(data.contracts.summary.playbooks)}</span>`,
+        `<span class="chip accent">policies ${esc(data.contracts.summary.policies)}</span>`
+      ].join("");
+
+      $("contractAgents").innerHTML = data.contracts.agents.map((item) => itemBlock(
+        `${item.id} / ${item.department}`,
+        item.primaryRunner,
+        `fallback=${item.fallbackRunner}, budget=${item.llmBudget}, action=${item.fallback}`,
+        "accent",
+      )).join("");
+
+      $("contractPlaybooks").innerHTML = data.contracts.playbooks.map((item) => itemBlock(
+        `${item.id}`,
+        item.owner,
+        `steps=${item.stepCount}`,
+        "accent",
+      )).join("");
+
+      $("contractPolicies").innerHTML = data.contracts.policies.map((item) => itemBlock(
+        `${item.id}`,
+        item.scope,
+        `rules=${item.ruleCount}`,
+        "accent",
+      )).join("");
+    }
+
+    async function refresh() {
       try {
-        state[name] = await jfetch(src.url);
-        delete state.errors[name];
-        lastFetch[name] = now;
-      } catch (e) {
-        state.errors[name] = e.message;
+        const data = await loadObservation();
+        $("errorBox").style.display = "none";
+        renderHero(data);
+        renderRunnerHealth(data);
+        renderSessionHealth(data);
+        renderLedger(data);
+        renderAuditor(data);
+        renderContracts(data);
+      } catch (error) {
+        $("errorBox").style.display = "block";
+        $("errorBox").textContent = error instanceof Error ? error.message : String(error);
       }
     }
 
-    async function refreshAll(force = false) {
-      if (!force && document.hidden) return;
-      await Promise.all(Object.keys(sources).map(n => load(n, force)));
-      renderAll();
-    }
-
-    /* ── Render: errors ── */
-    function renderErrors() {
-      const el = $("errArea");
-      const errs = Object.entries(state.errors);
-      if (!errs.length) { el.innerHTML = ""; return; }
-      el.innerHTML = errs.map(([k, msg]) =>
-        `<div class="err-banner">${esc(k)}: ${esc(msg)}</div>`
-      ).join("");
-    }
-
-    /* ── Render: header ── */
-    function renderHeader() {
-      const h = state.home;
-      const theme = h?.hero?.currentTheme ?? h?.currentTheme ?? "";
-      const sub = theme ? esc(theme) : "テーマ未設定";
-      const ts = new Date().toLocaleString("ja-JP");
-      $("headerSub").innerHTML = sub;
-      $("lastUpdated").textContent = `最終更新: ${ts}`;
-    }
-
-    /* ── Render: KPI ── */
-    function renderKpi() {
-      const s = state.summary;
-      const h = state.home;
-      const t7 = s?.threads7d ?? {};
-      const n7 = s?.notes7d ?? {};
-      const rev = h?.revenueSummary ?? h?.hero?.revenueSummary ?? {};
-
-      const cards = [
-        { val: fn(t7.published ?? t7.posts ?? t7.postCount, "0"),    label: "Threads投稿" },
-        { val: fn(t7.impressions ?? t7.views, "0"),   label: "表示数" },
-        { val: fn(n7.published ?? n7.publishCount, "0"), label: "note公開" },
-        { val: rev.value ?? (rev.total != null ? `\u00A5${fn(rev.total)}` : "\u00A50"), label: "売上" },
-      ];
-
-      $("kpiCards").innerHTML = cards.map(c =>
-        `<div class="kpi-card"><span class="kpi-val">${esc(c.val)}</span><span class="kpi-label">${esc(c.label)}</span></div>`
-      ).join("");
-
-      // Funnel preview (humanized)
-      const fp = h?.funnelPreview ?? h?.hero?.funnelPreview ?? null;
-      if (fp) {
-        const hf = humanizeFunnel(fp);
-        const lines = [];
-        if (hf.threads !== "-") lines.push(`<span>Threads: ${esc(hf.threads)}</span>`);
-        if (hf.note !== "-") lines.push(`<span>note: ${esc(hf.note)}</span>`);
-        const blockerHtml = hf.blocker ? ` <span class="chip chip-warn" style="margin-left:.5rem">${esc(hf.blocker)}</span>` : "";
-        const fallback = lines.length ? lines.join(" / ") : esc(fp.label ?? fp.text ?? JSON.stringify(fp));
-        $("funnelLine").innerHTML = `<div class="funnel-line${hf.blocker ? " funnel-warn" : ""}">${fallback}${blockerHtml}</div>`;
-      } else {
-        $("funnelLine").innerHTML = "";
+    refresh();
+    setInterval(() => {
+      if (!document.hidden) {
+        refresh();
       }
-    }
-
-    /* ── Render: Posts ── */
-    function renderPosts() {
-      const el = $("postsSection");
-      if (!state.posts && !state.errors.posts) { el.innerHTML = '<div class="loading">読み込み中...</div>'; return; }
-      const items = state.posts?.items ?? state.posts?.posts ?? (Array.isArray(state.posts) ? state.posts : []);
-      if (!items.length) { el.innerHTML = '<div class="text-sm text-slate-500">まだ投稿なし</div>'; return; }
-
-      const bestId = state.posts?.bestPost?.id ?? null;
-      el.innerHTML = '<div class="space-y-2">' + items.slice(0, 10).map(p => {
-        const isBest = bestId && p.id === bestId;
-        return `<div class="post-row${isBest ? " post-best" : ""}">
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-xs text-slate-400">${fd(p.timestamp ?? p.createdAt ?? p.date)}</span>
-            <div class="flex gap-3 text-xs text-slate-500">
-              <span>${fn(p.views ?? p.impressions, "0")} 表示</span>
-              <span>${fn(p.likes ?? p.likeCount, "0")} いいね</span>
-            </div>
-          </div>
-          <div class="mt-1 text-sm text-slate-700">${esc(trunc(p.text ?? p.body ?? p.content))}${isBest ? ' <span class="chip chip-warn" style="font-size:.65rem">BEST</span>' : ""}</div>
-        </div>`;
-      }).join("") + '</div>';
-    }
-
-    /* ── Render: Notes ── */
-    function renderNotes() {
-      const el = $("notesSection");
-      if (!state.notes && !state.errors.notes) { el.innerHTML = '<div class="loading">読み込み中...</div>'; return; }
-      const data = state.notes ?? {};
-      const published = data.published ?? data.articles ?? [];
-      const drafts = data.drafts ?? [];
-      const headerWaiting = data.headerImageWaiting ?? [];
-
-      let html = "";
-
-      // Published
-      html += '<div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-2">公開済み</div>';
-      if (!published.length) {
-        html += '<div class="text-sm text-slate-500 mb-4">まだ公開なし</div>';
-      } else {
-        html += '<div class="space-y-2 mb-4">' + published.map(a =>
-          `<div class="post-row">
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-sm font-semibold text-slate-700">${esc(a.title ?? "無題")}</span>
-              <div class="flex gap-3 text-xs text-slate-500">
-                <span>${fn(a.views ?? a.pageViews, "0")} 閲覧</span>
-                <span>${a.revenue != null ? "\u00A5" + fn(a.revenue) : ""}</span>
-              </div>
-            </div>
-          </div>`
-        ).join("") + '</div>';
-      }
-
-      // Drafts
-      html += '<div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-2">下書き</div>';
-      if (!drafts.length) {
-        html += '<div class="text-sm text-slate-500 mb-4">下書きなし</div>';
-      } else {
-        html += '<div class="space-y-2 mb-4">' + drafts.map(d =>
-          `<div class="post-row">
-            <div class="flex items-center justify-between gap-3">
-              <span class="text-sm text-slate-700">${esc(d.title ?? "無題")}</span>
-              <div class="flex gap-3 text-xs text-slate-400">
-                <span class="chip chip-neutral">${esc(d.status ?? "draft")}</span>
-                <span>${fd(d.createdAt ?? d.date)}</span>
-              </div>
-            </div>
-          </div>`
-        ).join("") + '</div>';
-      }
-
-      // Header image waiting
-      if (headerWaiting.length) {
-        html += '<div class="text-xs font-bold uppercase tracking-[0.16em] text-amber-600 mb-2">ヘッダー画像待ち</div>';
-        html += '<div class="space-y-1">' + headerWaiting.map(h =>
-          `<div class="post-row" style="border-color:rgba(245,158,11,.3)"><span class="text-sm text-amber-700">${esc(h.title ?? "無題")}</span></div>`
-        ).join("") + '</div>';
-      } else {
-        html += '<div class="text-xs text-slate-400">ヘッダー画像待ち: やることなし</div>';
-      }
-
-      el.innerHTML = html;
-    }
-
-    /* ── Render: Heartbeat History ── */
-    function renderHistory() {
-      const el = $("historySection");
-      if (!state.history && !state.errors.history) { el.innerHTML = '<div class="loading">読み込み中...</div>'; return; }
-      const cycles = state.history?.cycles ?? state.history?.items ?? state.history?.heartbeats ?? (Array.isArray(state.history) ? state.history : []);
-      if (!cycles.length) { el.innerHTML = '<div class="text-sm text-slate-500">まだ履歴なし</div>'; return; }
-
-      // 全サイクルのデータを部署→エージェント→日時順に再構成
-      const deptMap = {}; // { 部署名: { エージェント名: [{ date, summary, status, instruction }] } }
-      cycles.slice(0, 10).forEach(hb => {
-        const di = hb.departmentInstructions ?? {};
-        const runs = hb.runs ?? [];
-        const date = hb.createdAt;
-        const obj = hb.objective ?? "";
-
-        // 指示があった部署を記録
-        for (const [dept, instruction] of Object.entries(di)) {
-          if (!deptMap[dept]) deptMap[dept] = {};
-          if (!deptMap[dept]["_指示"]) deptMap[dept]["_指示"] = [];
-          deptMap[dept]["_指示"].push({ date, text: instruction, objective: obj });
-        }
-
-        // 実行があったエージェントを記録
-        runs.forEach(r => {
-          const dept = r.department ?? "不明";
-          const agent = r.agentName ?? r.actionType ?? "-";
-          if (!deptMap[dept]) deptMap[dept] = {};
-          if (!deptMap[dept][agent]) deptMap[dept][agent] = [];
-          deptMap[dept][agent].push({ date, summary: r.summary ?? "-", status: r.status ?? "-" });
-        });
-      });
-
-      // 部署の表示順（指示+実行が多い順）
-      const deptOrder = Object.entries(deptMap)
-        .sort((a, b) => {
-          const countA = Object.values(a[1]).reduce((s, arr) => s + arr.length, 0);
-          const countB = Object.values(b[1]).reduce((s, arr) => s + arr.length, 0);
-          return countB - countA;
-        })
-        .map(([dept]) => dept);
-
-      el.innerHTML = '<div class="space-y-4">' + deptOrder.map(dept => {
-        const agents = deptMap[dept];
-        const instructions = agents["_指示"] ?? [];
-
-        // エージェント一覧（_指示以外）
-        const agentNames = Object.keys(agents).filter(k => k !== "_指示");
-
-        return `<div class="rounded-[18px] border border-slate-200/80 bg-white/80 p-4">
-          <div class="text-sm font-bold text-slate-700">${esc(dept)}</div>
-          ${instructions.length ? `<details class="mt-2"><summary class="text-[10px] font-bold text-sky-700 cursor-pointer">総合指揮官からの指示 (${instructions.length}回)</summary><div class="mt-1 space-y-1">${instructions.map(i =>
-            `<div class="rounded-lg bg-sky-50 border border-sky-200/60 px-2 py-1 text-xs">
-              <span class="text-slate-400">${fd(i.date)}</span>
-              <span class="text-sky-800 ml-1">${esc(trunc(i.text, 100))}</span>
-            </div>`
-          ).join("")}</div></details>` : ''}
-          ${agentNames.length ? agentNames.map(agent => {
-            const entries = agents[agent];
-            return `<div class="mt-2">
-              <div class="text-xs font-semibold text-slate-600">${esc(agent)}</div>
-              <div class="mt-1 space-y-1">${entries.map(e =>
-                `<div class="text-xs leading-5 text-slate-700 flex items-start gap-2">
-                  <span class="text-slate-400 shrink-0" style="min-width:5rem">${fd(e.date)}</span>
-                  <span class="flex-1">${esc(trunc(e.summary, 120))}</span>
-                  <span class="chip ${e.status === "completed" ? "chip-good" : e.status === "failed" ? "chip-bad" : "chip-neutral"} shrink-0" style="font-size:0.6rem">${esc(e.status)}</span>
-                </div>`
-              ).join("")}</div>
-            </div>`;
-          }).join("") : '<div class="mt-2 text-xs text-slate-400">まだ実行履歴なし</div>'}
-        </div>`;
-      }).join("") + '</div>';
-    }
-
-    /* ── Render: Engagement (collapsed section) ── */
-    function renderEngagement() {
-      const el = $("engagementSection");
-      const s = state.summary;
-      if (!s && !state.errors.summary) { el.innerHTML = '<div class="loading">読み込み中...</div>'; return; }
-      if (!s) { el.innerHTML = '<div class="text-sm text-slate-500">データなし</div>'; return; }
-
-      const t7 = s.threads7d ?? {};
-      const t24 = s.threads24h ?? {};
-      const n7 = s.notes7d ?? {};
-      const n24 = s.notes24h ?? {};
-
-      // Best post from posts data
-      const bp = state.posts?.bestPost ?? null;
-
-      let html = '<div class="grid grid-cols-1 md:grid-cols-2 gap-4">';
-      html += `<div>
-        <div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-2">Threads</div>
-        <table class="w-full text-sm">
-          <tr><td class="text-slate-500 pr-3">7日 投稿</td><td class="font-semibold">${fn(t7.published ?? t7.posts, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">7日 表示</td><td class="font-semibold">${fn(t7.impressions ?? t7.views, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">7日 いいね</td><td class="font-semibold">${fn(t7.likes, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">24h 投稿</td><td class="font-semibold">${fn(t24.published ?? t24.posts, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">24h 表示</td><td class="font-semibold">${fn(t24.impressions ?? t24.views, "0")}</td></tr>
-        </table>
-      </div>`;
-      html += `<div>
-        <div class="text-xs font-bold uppercase tracking-[0.16em] text-slate-500 mb-2">note</div>
-        <table class="w-full text-sm">
-          <tr><td class="text-slate-500 pr-3">7日 公開</td><td class="font-semibold">${fn(n7.published ?? n7.publishCount, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">7日 閲覧</td><td class="font-semibold">${fn(n7.views ?? n7.pageViews, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">24h 公開</td><td class="font-semibold">${fn(n24.published ?? n24.publishCount, "0")}</td></tr>
-          <tr><td class="text-slate-500 pr-3">24h 閲覧</td><td class="font-semibold">${fn(n24.views ?? n24.pageViews, "0")}</td></tr>
-        </table>
-      </div>`;
-      html += '</div>';
-
-      if (bp) {
-        html += `<div class="mt-4 post-row post-best">
-          <div class="text-xs font-bold uppercase tracking-[0.16em] text-amber-600 mb-1">ベスト投稿</div>
-          <div class="text-sm text-slate-700">${esc(trunc(bp.text ?? bp.body ?? bp.content, 120))}</div>
-          <div class="mt-1 flex gap-3 text-xs text-slate-500">
-            <span>${fn(bp.views ?? bp.impressions, "0")} 表示</span>
-            <span>${fn(bp.likes ?? bp.likeCount, "0")} いいね</span>
-            <span>${fd(bp.timestamp ?? bp.createdAt ?? bp.date)}</span>
-          </div>
-        </div>`;
-      }
-
-      el.innerHTML = html;
-    }
-
-    /* ── Master render ── */
-    function renderAll() {
-      renderErrors();
-      renderHeader();
-      renderKpi();
-      renderPosts();
-      renderNotes();
-      renderHistory();
-      renderEngagement();
-    }
-
-    /* ── Init ── */
-    setInterval(() => refreshAll(false), 15000);
-    refreshAll(true);
+    }, 60000);
   </script>
 </body>
 </html>

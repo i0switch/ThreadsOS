@@ -14,8 +14,8 @@
 | Threads運用の自動化 | Threads API連携・投稿生成・監査・公開・返信の一連フローあり | 概ね実装済み | - |
 | note運用の自動化 | Playwright経由の記事公開・監査・アイデア生成あり | 概ね実装済み | - |
 | 外部リサーチと競合分析の継続実行 | Jina Reader統合・competitorSnapshotsテーブルあり | 実装済みだが継続的な自動実行サイクルが弱い | P2 |
-| 各部署・各担当者による提案型運用 | departmentRuns / executiveCycles テーブルあり | 提案モデル（proposals）が未実装 | P1 |
-| 管理者による監督・承認・差し戻し | humanReviewItems テーブル・review-approve CLIあり | ダッシュボードUI未実装。CLIのみ | P1 |
+| 各部署・各担当者による提案型運用 | departmentRuns / executiveCycles / proposals テーブルあり | 概ね実装済み | - |
+| 管理者による監督・承認・差し戻し | proposals + operations mode + observation dashboard あり | 現行は observation-first。旧CLI前提記述が残る | P2 |
 | コストを抑えた長期継続運用 | LLM_MODE=heartbeat でClaude Code経由実行 | 予算管理・トークン監視が未実装 | P1 |
 
 ---
@@ -25,7 +25,7 @@
 | 仕様要件 | 現状実装 | ギャップ | 優先度 |
 |----------|----------|---------|--------|
 | ThreadsからCV・売上を元に自律調整 | cadence-optimizer / engagement-analysisで反応分析 | CV・売上データの追跡が未実装 | P1 |
-| 必要な時だけ人間がダッシュボードから介入 | humanReviewItems + CLI承認のみ | ダッシュボードUI未実装 | P1 |
+| 必要な時だけ人間がダッシュボードから介入 | proposals / operations mode / observation dashboard で介入可能 | 承認UIより観測中心へ寄せた実装 | P2 |
 
 ---
 
@@ -36,7 +36,7 @@
 | テーマ・ジャンルの共有 | operatorProfiles テーブル + humanInputs | 実装済み | - |
 | 参考資料の提供 | humanInputs (input_type) で受付 | 実装済み | - |
 | アカウント情報設定 | .env でTHREADS_*, NOTE_* 設定 | 実装済み | - |
-| ダッシュボードで提案の承認・差し戻し | CLIのみ（review-approve.ts） | Web UIなし | P1 |
+| ダッシュボードで提案の承認・差し戻し | proposals と observation-first dashboard がある | 専用承認UIより executive / proposal flow 中心 | P2 |
 | 緊急停止・方針変更 | 未実装 | 停止機能・方針変更UIなし | P1 |
 
 ---

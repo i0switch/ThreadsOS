@@ -1,7 +1,6 @@
 ﻿import { randomUUID } from "node:crypto";
 import { and, desc, eq, isNull, lt, or } from "drizzle-orm";
 import { createLlmClient, DryRunLlmClient } from "../adapters/llm/index.js";
-import { startHeartbeatSession } from "../app/heartbeat-context.js";
 import {
   DryRunNoteApiClient,
   NoteApiClientImpl,
@@ -12,6 +11,7 @@ import {
   DryRunThreadsApiClient,
   ThreadsGraphApiClient,
 } from "../adapters/threads-api/index.js";
+import { startHeartbeatSession } from "../app/heartbeat-context.js";
 import { loadEnv } from "../config/env.js";
 import { ensureAutonomyTables } from "../db/bootstrap.js";
 import { db } from "../db/index.js";
@@ -21,32 +21,31 @@ import {
   departmentRuns,
   departmentSummaries,
   heartbeatStates,
-  humanReviewItems,
   noteDrafts,
-  proposals,
   scheduledJobRuns,
   systemControls,
 } from "../db/schema.js";
-import type { ActionType } from "../services/content-scheduler/index.js";
-import type { ErrorContext } from "../services/executive/index.js";
+import type { DepartmentExperimentContext } from "../domain/department/index.js";
 import { AutoPublisherServiceImpl } from "../services/auto-publisher/index.js";
 import { createBudgetService } from "../services/budget/index.js";
 import { CadenceOptimizerServiceImpl } from "../services/cadence-optimizer/index.js";
+import type { ActionType } from "../services/content-scheduler/index.js";
 import { ContentSchedulerServiceImpl } from "../services/content-scheduler/index.js";
 import { DepartmentExecutionServiceImpl } from "../services/department-execution/index.js";
 import { createDiffCollectorService } from "../services/diff-collector/index.js";
+import type { ErrorContext } from "../services/executive/index.js";
 import { ExecutiveServiceImpl } from "../services/executive/index.js";
+import { ExecutiveExperimentServiceImpl } from "../services/executive-experiment/index.js";
 import { createMemoryService } from "../services/memory/index.js";
 import { NoteEngagementAnalysisServiceImpl } from "../services/note-engagement-analysis/index.js";
 import { NotificationServiceImpl } from "../services/notification/index.js";
+import { createOperationsModeService } from "../services/operations-mode/index.js";
 import { OrchestrationServiceImpl } from "../services/orchestration/index.js";
-import { createProposalFlowService } from "../services/proposal-flow/index.js";
 import { ReplyExecutionServiceImpl } from "../services/reply-execution/index.js";
 import { createRetrievalService } from "../services/retrieval/index.js";
 import { createRuntimeStateService } from "../services/runtime-state/index.js";
 import { createSafetyService } from "../services/safety/index.js";
 import { refreshToken, updateEnvFile } from "./refresh-threads-token.js";
-import { parseJsonObject } from "../utils/llm-json.js";
 import { runJob } from "./runner.js";
 
 function readEnvInt(name: string, fallback: number): number {
@@ -69,18 +68,20 @@ const storage = new FileSystemStorageClient();
 
 const scheduler = new ContentSchedulerServiceImpl(maxPostsPerHour);
 const executive = new ExecutiveServiceImpl();
+const executiveExperiment = new ExecutiveExperimentServiceImpl();
 const orchestration = new OrchestrationServiceImpl();
 const diffCollector = createDiffCollectorService();
 const memoryService = createMemoryService();
 const budgetService = createBudgetService();
 const runtimeState = createRuntimeStateService();
-const proposalFlow = createProposalFlowService();
 const retrievalService = createRetrievalService(memoryService);
+const operationsMode = createOperationsModeService();
 const safetyService = createSafetyService();
 const autoPublisher = new AutoPublisherServiceImpl({
   maxPostsPerHour,
   maxRepliesPerHour,
   dryRun,
+  operationsMode,
 });
 const optimizer = new CadenceOptimizerServiceImpl();
 const replyExecution = new ReplyExecutionServiceImpl(maxRepliesPerHour);
@@ -122,6 +123,42 @@ function createDepartmentExecution() {
     createNoteApiClient,
     runtimeState,
   });
+}
+
+function prioritizeExperimentAction(
+  approvedActions: Array<{
+    type: ActionType;
+    priority: number;
+    reason: string;
+  }>,
+  candidateActions: Array<{
+    type: ActionType;
+    priority: number;
+    reason: string;
+  }>,
+  experimentContext: DepartmentExperimentContext,
+) {
+  const experimentAction = approvedActions.find(
+    (action) => action.type === experimentContext.actionType,
+  ) ??
+    candidateActions.find(
+      (action) => action.type === experimentContext.actionType,
+    ) ?? {
+      type: experimentContext.actionType,
+      priority: 1,
+      reason: `phase4 canary: ${experimentContext.bottleneck}`,
+    };
+
+  return [
+    {
+      ...experimentAction,
+      priority: Math.min(experimentAction.priority, 1),
+      reason: `${experimentAction.reason} [phase4 canary ${experimentContext.bottleneck}]`,
+    },
+    ...approvedActions.filter(
+      (action) => action.type !== experimentContext.actionType,
+    ),
+  ].slice(0, 3);
 }
 
 async function runTrackedSubJob(
@@ -320,11 +357,29 @@ await runJob(
         )
         .all();
       const pausedScopes = new Set(activePauses.map((c) => c.scope));
+      const modeEvaluation = operationsMode.reconcileMode();
 
       if (pausedScopes.has("global")) {
         logger.warn("system_controls: global pause active, skipping heartbeat");
         return "Skipped: global pause active";
       }
+
+      if (modeEvaluation.mode === "safe_freeze") {
+        logger.warn(
+          { modeEvaluation },
+          "Operations mode is safe_freeze, skipping heartbeat",
+        );
+        return `Skipped: operations mode ${modeEvaluation.mode}`;
+      }
+
+      logger.info(
+        {
+          mode: modeEvaluation.mode,
+          reason: modeEvaluation.reason,
+          evidence: modeEvaluation.evidence,
+        },
+        "Operations mode evaluated before heartbeat",
+      );
 
       // ── Safety: force-stop check ─────────────────────────────
       if (safetyService.shouldForceStop()) {
@@ -344,6 +399,18 @@ await runJob(
       // ── Step 2: 差分収集 ──────────────────────────────────────
       const diff = await diffCollector.collectSinceLastHeartbeat();
       logger.info({ diff }, "Diff collected since last heartbeat");
+
+      const experimentEvaluation = executiveExperiment.evaluateDueExperiments();
+      if (experimentEvaluation.evaluatedCount > 0) {
+        logger.info(
+          {
+            evaluated: experimentEvaluation.evaluatedCount,
+            promoted: experimentEvaluation.promotedCount,
+            rejected: experimentEvaluation.rejectedCount,
+          },
+          "Phase 4 experiment evaluations processed",
+        );
+      }
 
       // ── Step 3: 重要度判定 ────────────────────────────────────
       type DiffPriority = "critical" | "high" | "medium" | "low";
@@ -391,12 +458,30 @@ await runJob(
       logger.info({ diffPriorities }, "Diff priorities assessed");
 
       // ── Budget initialization (Step 13 prep) ─────────────────
+      // Policy-governed: global limits from policies/rate-budget.md,
+      // per-department limits from agents/<dept>.md llmBudget field.
+      const { getCompiledContractStore } = await import("../services/contracts/index.js");
+      let globalTokenLimit = 50000;
+      let globalCallLimit = 30;
+      let deptTokenLimit = 10000;
+      let deptCallLimit = 10;
+      try {
+        const contracts = getCompiledContractStore();
+        const rateBudgetPolicy = contracts.policies.find((p) => p.id === "rate-budget");
+        if (rateBudgetPolicy?.thresholds) {
+          const rb = rateBudgetPolicy.thresholds as Record<string, unknown>;
+          if (typeof rb.tokensPerHeartbeat === "number") globalTokenLimit = rb.tokensPerHeartbeat;
+          if (typeof rb.callsPerHeartbeat === "number") globalCallLimit = rb.callsPerHeartbeat;
+          if (typeof rb.deptTokensPerHeartbeat === "number") deptTokenLimit = rb.deptTokensPerHeartbeat;
+          if (typeof rb.deptCallsPerHeartbeat === "number") deptCallLimit = rb.deptCallsPerHeartbeat;
+        }
+      } catch { /* fallback to defaults */ }
       budgetService.initBudget(
         "global",
         "heartbeat",
         heartbeatPeriodKey,
-        50000,
-        30,
+        globalTokenLimit,
+        globalCallLimit,
       );
       const departments = [
         "command",
@@ -410,8 +495,8 @@ await runJob(
           dept,
           "heartbeat",
           heartbeatPeriodKey,
-          10000,
-          10,
+          deptTokenLimit,
+          deptCallLimit,
         );
       }
 
@@ -424,21 +509,25 @@ await runJob(
       }
 
       if (!dryRun) {
-        const seededThreads =
-          await scheduler.syncThreadSlotsFromAuditedDrafts(maxPostsPerHour);
-        if (seededThreads > 0) {
-          logger.info(
-            { seeded: seededThreads },
-            "Seeded thread slots before heartbeat",
-          );
+        if (operationsMode.isChannelWritable("threads")) {
+          const seededThreads =
+            await scheduler.syncThreadSlotsFromAuditedDrafts(maxPostsPerHour);
+          if (seededThreads > 0) {
+            logger.info(
+              { seeded: seededThreads },
+              "Seeded thread slots before heartbeat",
+            );
+          }
         }
 
-        const seededNotes = await scheduler.syncNoteSlotsFromAuditedDrafts(1);
-        if (seededNotes > 0) {
-          logger.info(
-            { seeded: seededNotes },
-            "Seeded note slots before heartbeat",
-          );
+        if (operationsMode.isChannelWritable("note")) {
+          const seededNotes = await scheduler.syncNoteSlotsFromAuditedDrafts(1);
+          if (seededNotes > 0) {
+            logger.info(
+              { seeded: seededNotes },
+              "Seeded note slots before heartbeat",
+            );
+          }
         }
       }
 
@@ -455,7 +544,7 @@ await runJob(
         "Department reports collected (bottom-up)",
       );
 
-      // ── Step 3.7: エラー情報・プロポーザル収集（Executive自律判断用） ──
+      // ── Step 3.7: エラー情報収集（Executive自律判断用） ──
       const recentFailures = db
         .select()
         .from(scheduledJobRuns)
@@ -463,49 +552,22 @@ await runJob(
         .orderBy(desc(scheduledJobRuns.startedAt))
         .limit(5)
         .all()
-        .map(r => ({
+        .map((r) => ({
           jobName: r.jobName,
           error: r.resultSummary ?? "unknown",
           at: r.startedAt,
         }));
 
-      const pendingReviewCount = db
-        .select()
-        .from(humanReviewItems)
-        .where(eq(humanReviewItems.status, "pending"))
-        .all().length;
-
-      const pendingProposals = db
-        .select()
-        .from(proposals)
-        .where(
-          and(
-            eq(proposals.status, "pending"),
-            eq(proposals.currentStage, "executive_review"),
-          ),
-        )
-        .all();
-
       const errorContext: ErrorContext = {
         recentFailures,
-        pendingReviewCount,
-        pendingProposalCount: pendingProposals.length,
+        pendingReviewCount: 0,
+        pendingProposalCount: 0,
         consecutiveFailures: current?.consecutiveFailures ?? 0,
-        pendingProposalSummaries: pendingProposals.map(p => {
-          const meta = p.evidence ? (() => { try { return JSON.parse(p.evidence); } catch { return {}; } })() : {};
-          return {
-            id: p.id,
-            actionType: meta?.actionType ?? p.title,
-            reason: p.reason,
-          };
-        }),
       };
 
       logger.info(
         {
           recentFailures: recentFailures.length,
-          pendingReviewCount,
-          pendingProposalCount: pendingProposals.length,
           consecutiveFailures: errorContext.consecutiveFailures,
         },
         "Error context collected for executive",
@@ -519,7 +581,37 @@ await runJob(
         llm,
         errorContext,
       );
-      const results: string[] = [];
+      const results: string[] = experimentEvaluation.summaries.map(
+        (summary) => `EXPERIMENT_EVAL: ${summary}`,
+      );
+
+      const experimentPlan = executiveExperiment.planHeartbeatExperiment({
+        cycleId: cycle.cycleId,
+        heartbeatPeriodKey,
+        candidateActions: actions,
+        approvedActions: cycle.approvedActions,
+        objective: cycle.objective,
+        funnelStage: cycle.funnelStage,
+        llmReasoning: cycle.llmReasoning,
+      });
+
+      if (experimentPlan) {
+        cycle.approvedActions = prioritizeExperimentAction(
+          cycle.approvedActions,
+          actions,
+          experimentPlan.executionContext,
+        );
+        logger.info(
+          {
+            experimentId: experimentPlan.experimentId,
+            bottleneck: experimentPlan.diagnosis.bottleneck,
+            primaryMetric: experimentPlan.selected.primaryMetric,
+            selectedPattern: experimentPlan.selected.patternKey,
+            actionType: experimentPlan.selected.actionType,
+          },
+          "Phase 4 experiment planned",
+        );
+      }
 
       logger.info(
         {
@@ -542,74 +634,6 @@ await runJob(
         "Heartbeat cycle planned by executive (LLM-driven)",
       );
 
-      // ── Step 4.5: Executive自律プロポーザル判断の実行 ──────────
-      if (cycle.proposalDecisions && cycle.proposalDecisions.length > 0) {
-        for (const pd of cycle.proposalDecisions) {
-          try {
-            if (pd.decision === "approve") {
-              proposalFlow.approveProposal(pd.proposalId, "executive-director", "Executive自律承認");
-              logger.info({ proposalId: pd.proposalId }, "Executive auto-approved proposal");
-            } else if (pd.decision === "reject") {
-              proposalFlow.rejectProposal(pd.proposalId, "executive-director", "Executive自律却下");
-              logger.info({ proposalId: pd.proposalId }, "Executive auto-rejected proposal");
-            } else if (pd.decision === "escalate_to_human") {
-              proposalFlow.escalateToHuman(pd.proposalId, "executive-director", "Executive判断: 人間確認必要");
-              logger.info({ proposalId: pd.proposalId }, "Executive escalated proposal to human review");
-            }
-          } catch (pdErr) {
-            logger.warn(
-              { proposalId: pd.proposalId, error: pdErr instanceof Error ? pdErr.message : String(pdErr) },
-              "Failed to process proposal decision",
-            );
-          }
-        }
-      }
-
-      // ── Step 4.7: 承認済みプロポーザルをアクション実行キューに追加 ──
-      const approvedProposals = db
-        .select()
-        .from(proposals)
-        .where(
-          and(
-            eq(proposals.status, "approved"),
-          ),
-        )
-        .orderBy(desc(proposals.reviewedAt))
-        .limit(5)
-        .all()
-        .filter(p => {
-          if (!p.reviewedAt) return false;
-          // 直近24時間以内に承認されたもの
-          const reviewedTime = new Date(p.reviewedAt).getTime();
-          return Date.now() - reviewedTime < 24 * 60 * 60 * 1000 && !p.executedAt;
-        });
-
-      for (const ap of approvedProposals) {
-        try {
-          const meta = ap.evidence ? (() => { try { return JSON.parse(ap.evidence); } catch { return {}; } })() : {};
-          const actionType = meta?.actionType ?? null;
-          if (actionType) {
-            // Mark as executed so it won't be picked up again
-            db.update(proposals)
-              .set({ executedAt: new Date().toISOString() })
-              .where(eq(proposals.id, ap.id))
-              .run();
-            // Add to candidate actions for execution
-            cycle.approvedActions.push({
-              type: actionType as ActionType,
-              priority: meta?.priority ?? 5,
-              reason: `承認済みプロポーザル ${ap.id}: ${ap.reason}`,
-            });
-            logger.info({ proposalId: ap.id, actionType }, "Approved proposal added to execution queue");
-          }
-        } catch (apErr) {
-          logger.warn(
-            { proposalId: ap.id, error: apErr instanceof Error ? apErr.message : String(apErr) },
-            "Failed to queue approved proposal",
-          );
-        }
-      }
-
       // ── Step 4.8: audited note draft があれば強制公開（Executiveの判断を待たない） ──
       try {
         const auditedNoteCount = db
@@ -628,6 +652,7 @@ await runJob(
           )
           .all().length;
         if (
+          operationsMode.isChannelWritable("note") &&
           auditedNoteCount > 0 &&
           pendingNoteSlotCount > 0 &&
           !cycle.approvedActions.some((a) => a.type === "generate_note")
@@ -656,15 +681,44 @@ await runJob(
         }
       } catch (forceErr) {
         logger.warn(
-          { error: forceErr instanceof Error ? forceErr.message : String(forceErr) },
+          {
+            error:
+              forceErr instanceof Error ? forceErr.message : String(forceErr),
+          },
           "Failed to check/force note publish",
         );
       }
 
       // ── Step 5-6: 各部署へ最小コンテキスト配布 & 部署実行 ───
       for (const action of cycle.approvedActions) {
-        runtimeState.startAction(action.type, action.reason);
         const department = executive.resolveDepartment(action.type);
+        const experimentContext =
+          experimentPlan &&
+          action.type === experimentPlan.executionContext.actionType
+            ? experimentPlan.executionContext
+            : undefined;
+        const actionDecision = operationsMode.getActionDecision(action.type);
+
+        if (!actionDecision.allowed) {
+          logger.warn(
+            {
+              action: action.type,
+              mode: actionDecision.mode,
+              reason: actionDecision.reason,
+            },
+            "Skipping action due to operations mode",
+          );
+          results.push(`SKIPPED: ${action.type} - ${actionDecision.reason}`);
+          if (experimentContext) {
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount: 0,
+            });
+          }
+          continue;
+        }
+
+        runtimeState.startAction(action.type, action.reason);
 
         // Skip if department is paused by system_controls
         if (pausedScopes.has(department)) {
@@ -675,6 +729,12 @@ await runJob(
           results.push(
             `SKIPPED: ${action.type} - department ${department} paused`,
           );
+          if (experimentContext) {
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount: 0,
+            });
+          }
           continue;
         }
 
@@ -685,6 +745,12 @@ await runJob(
             "Budget exceeded for department, deferring to next heartbeat",
           );
           results.push(`DEFERRED: ${action.type} - budget exceeded`);
+          if (experimentContext) {
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount: 0,
+            });
+          }
           continue;
         }
 
@@ -695,6 +761,12 @@ await runJob(
             "Emergency degradation: skipping low-priority action",
           );
           results.push(`DEFERRED: ${action.type} - emergency cost degradation`);
+          if (experimentContext) {
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount: 0,
+            });
+          }
           continue;
         }
 
@@ -735,37 +807,23 @@ await runJob(
           "Executing heartbeat action with minimal context",
         );
 
-        // ── Step 8-10: Auto-approval vs pending proposal ───────
+        // ── Step 8-10: Auditor verdict (auto-execute / auto-skip / auto-quarantine) ──
         const isAutoApprovable = safetyService.checkAutoApproval(action);
 
-        if (!isAutoApprovable && !dryRun) {
-          const proposalRuntime = runtimeState.markPendingProposal(
-            action.type,
-            action.reason,
-          );
-          const proposalId = proposalFlow.createHierarchicalProposal({
-            agentId: proposalRuntime.workerId,
-            leaderAgentId: proposalRuntime.leaderId,
-            executiveAgentId: proposalRuntime.executiveId,
-            department,
-            title: `${action.type} requires review`,
-            description: action.reason,
-            reason: action.reason,
-            evidence: JSON.stringify({ diff, degradation, retrievalContext }),
-            expectedEffect: `Execute ${action.type} action`,
-            priority: action.priority <= 3 ? "high" : "medium",
-            metadata: {
-              actionType: action.type,
-              priority: action.priority,
-            },
-          });
+        if (!isAutoApprovable) {
           results.push(
-            `PENDING_REVIEW: ${action.type} - proposal ${proposalId} created`,
+            `SKIPPED: ${action.type} - auditor verdict: skip (safety check failed)`,
           );
           logger.info(
-            { proposalId, action: action.type },
-            "Action requires review, stored as proposal",
+            { action: action.type },
+            "Action skipped by auditor safety check (auto-skip)",
           );
+          if (experimentContext) {
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount: 0,
+            });
+          }
           continue;
         }
 
@@ -802,8 +860,23 @@ await runJob(
               })
               .run();
           }
-          const execution = await departmentExecution.execute(action, instruction);
+          const execution = await departmentExecution.execute(
+            action,
+            instruction,
+            experimentContext,
+          );
           results.push(execution.summary);
+
+          if (experimentContext) {
+            const publishedCount =
+              typeof execution.payload?.publishedCount === "number"
+                ? execution.payload.publishedCount
+                : 0;
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount,
+            });
+          }
 
           // Record budget spend
           budgetService.spend(department, 1000, 1);
@@ -838,6 +911,12 @@ await runJob(
             "Action failed, continuing",
           );
           results.push(`FAILED: ${action.type} - ${message}`);
+          if (experimentContext) {
+            executiveExperiment.markCanaryLaunched({
+              experimentId: experimentContext.experimentId,
+              publishedCount: 0,
+            });
+          }
           await executive.recordDepartmentRun({
             cycleId: cycle.cycleId,
             department,
@@ -905,66 +984,6 @@ await runJob(
         "Budget status at heartbeat completion",
       );
 
-      // ── Step 14: human_review_items 自動再評価 ─────────────────
-      const pendingReviews = db
-        .select()
-        .from(humanReviewItems)
-        .where(eq(humanReviewItems.status, "pending"))
-        .limit(5)
-        .all();
-
-      if (pendingReviews.length > 0 && !dryRun) {
-        logger.info({ count: pendingReviews.length }, "Auto-evaluating pending human review items");
-        for (const review of pendingReviews) {
-          try {
-            const reviewPrompt = `以下のコンテンツは安全ですか？自動承認して問題ないか判断してください。
-
-タイプ: ${review.itemType}
-理由: ${review.reason}
-
-以下のJSON形式で回答:
-{
-  "safe": true | false,
-  "reason": "判断理由"
-}
-
-判断基準:
-- 攻撃的・差別的内容 → safe: false
-- 医療・法律・投資の具体的アドバイス → safe: false
-- 一般的な質問への返信・好意的コメント → safe: true
-- 判断が難しい場合 → safe: false (人間に任せる)`;
-
-            const raw = await llm.generate(reviewPrompt, {
-              label: "heartbeat-human-review-auto-eval",
-              temperature: 0.2,
-              tier: "fast",
-            });
-            const result = parseJsonObject<{ safe: boolean; reason: string }>(raw);
-            if (result?.safe === true) {
-              db.update(humanReviewItems)
-                .set({
-                  status: "approved",
-                  reviewedAt: new Date().toISOString(),
-                  reviewerNote: `Executive自動承認: ${result.reason}`,
-                })
-                .where(eq(humanReviewItems.id, review.id))
-                .run();
-              logger.info({ reviewId: review.id }, "Auto-approved human review item");
-            } else {
-              logger.info(
-                { reviewId: review.id, reason: result?.reason ?? "parse failed" },
-                "Human review item kept pending",
-              );
-            }
-          } catch (reviewErr) {
-            logger.warn(
-              { reviewId: review.id, error: reviewErr instanceof Error ? reviewErr.message : String(reviewErr) },
-              "Failed to auto-evaluate human review item",
-            );
-          }
-        }
-      }
-
       // Expire stale working memory
       const expired = memoryService.expireWorking();
       if (expired > 0) {
@@ -1031,4 +1050,3 @@ await runJob(
     }
   },
 );
-

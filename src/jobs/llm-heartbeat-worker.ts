@@ -1,25 +1,35 @@
 /**
  * LLM Heartbeat Worker
  *
- * Claude Code（AI）がローカルで実行するワーカー。
+ * ThreadsOS の runner abstraction 経由でローカル LLM を実行するワーカー。
  * llm_task_queue テーブルの pending タスクを拾い、
- * Claude CLI（`claude -p`）を使って処理して結果を書き戻す。
+ * Claude / Codex / Copilot のいずれかで処理して結果を書き戻す。
  *
  * 使い方:
  *   pnpm job:llm-worker
  *
  * または Claude Code スキル経由で呼び出す。
  */
-
-import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { and, eq } from "drizzle-orm";
+import {
+  buildClaudeCliArgs,
+  buildClaudeSystemPrompt,
+  createRunnerRouter,
+  createRunnerTask,
+  type RunnerConfidence,
+  type RunnerName,
+  type RunnerRole,
+  type RunnerTaskType,
+  resolveClaudeCliModel,
+} from "../adapters/llm/runner-router.js";
 import { logger } from "../app/logger.js";
-import { loadEnv } from "../config/env.js";
 import { db } from "../db/index.js";
 import { llmTaskQueue } from "../db/schema.js";
+
+export { buildClaudeCliArgs, buildClaudeSystemPrompt, resolveClaudeCliModel };
 
 const LOCK_FILE = join(process.cwd(), "tmp", "llm-worker.lock");
 type LlmTier = "fast" | "standard" | "premium";
@@ -28,7 +38,14 @@ type HeartbeatTaskOptions = {
   temperature?: number;
   systemPrompt?: string;
   tier?: LlmTier;
+  taskType?: RunnerTaskType;
+  role?: RunnerRole;
+  confidenceRequired?: RunnerConfidence;
+  preferredRunner?: RunnerName;
+  fallbackRunner?: RunnerName;
+  expectJson?: boolean;
 };
+const runnerRouter = createRunnerRouter();
 
 function acquireLock(): boolean {
   if (existsSync(LOCK_FILE)) {
@@ -58,7 +75,6 @@ function releaseLock(): void {
 }
 
 const POLL_INTERVAL_MS = 1000;
-const CLAUDE_TIMEOUT_MS = 8 * 60 * 1000;
 
 function parseTaskOptions(optionsJson: string | null): HeartbeatTaskOptions {
   if (!optionsJson) {
@@ -75,115 +91,6 @@ function parseTaskOptions(optionsJson: string | null): HeartbeatTaskOptions {
     );
     return {};
   }
-}
-
-export function buildClaudeSystemPrompt(
-  systemPrompt?: string,
-  options: HeartbeatTaskOptions = {},
-): string | undefined {
-  const constraints: string[] = [];
-  const maxTokens = options.maxTokens;
-
-  if (Number.isFinite(maxTokens) && (maxTokens ?? 0) > 0) {
-    constraints.push(
-      `Keep the response within approximately ${Math.floor(maxTokens ?? 0)} tokens.`,
-    );
-  }
-
-  if (typeof options.temperature === "number") {
-    if (options.temperature <= 0.3) {
-      constraints.push(
-        "Be deterministic, concise, and avoid unnecessary variation.",
-      );
-    } else if (options.temperature >= 0.85) {
-      constraints.push(
-        "You may explore multiple phrasings, but stay precise and follow the requested format.",
-      );
-    }
-  }
-
-  const merged = [
-    systemPrompt?.trim(),
-    constraints.length > 0
-      ? `Additional generation constraints:\n${constraints.map((item) => `- ${item}`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-
-  return merged || undefined;
-}
-
-export function resolveClaudeCliModel(tier?: LlmTier): string {
-  const env = loadEnv();
-  const resolvedTier = tier ?? env.LLM_DEFAULT_TIER;
-  switch (resolvedTier) {
-    case "fast":
-      return env.LLM_HEARTBEAT_MODEL_FAST;
-    case "premium":
-      return env.LLM_HEARTBEAT_MODEL_PREMIUM;
-    default:
-      return env.LLM_HEARTBEAT_MODEL_STANDARD;
-  }
-}
-
-export function buildClaudeCliArgs(
-  systemPrompt?: string,
-  options: HeartbeatTaskOptions = {},
-): string[] {
-  const args = [
-    "--print",
-    "--output-format",
-    "text",
-    "--model",
-    resolveClaudeCliModel(options.tier),
-  ];
-  if (systemPrompt) {
-    args.push("--system-prompt", systemPrompt);
-  }
-  return args;
-}
-
-function callClaudeCli(
-  prompt: string,
-  systemPrompt?: string,
-  options: HeartbeatTaskOptions = {},
-): string {
-  const mergedSystemPrompt = buildClaudeSystemPrompt(systemPrompt, options);
-  const args = buildClaudeCliArgs(mergedSystemPrompt, options);
-
-  // プロンプトを stdin から渡す
-  const result = spawnSync("claude", args, {
-    input: prompt,
-    encoding: "utf-8",
-    timeout: CLAUDE_TIMEOUT_MS,
-    maxBuffer: 4 * 1024 * 1024,
-    // フックのプロンプト汚染を防ぐ（UserPromptSubmit フックをスキップさせる）
-    env: { ...process.env, THREADOS_INTERNAL: "1" },
-  });
-
-  if (result.error) {
-    throw new Error(`Claude CLI 起動失敗: ${result.error.message}`);
-  }
-
-  const stdout = (result.stdout ?? "").trim();
-
-  // 使用量制限メッセージを検出してエラーとして扱う
-  if (
-    stdout.includes("out of extra usage") ||
-    stdout.includes("out of usage")
-  ) {
-    throw new Error(`Claude 使用量制限: ${stdout.slice(0, 100)}`);
-  }
-
-  // SessionEndフック失敗などでexit code != 0でもstdoutに出力がある場合は使う
-  if (result.status !== 0 && !stdout) {
-    const stderr = result.stderr?.trim() ?? "";
-    throw new Error(`Claude CLI エラー (${result.status}): ${stderr}`);
-  }
-
-  return stdout;
 }
 
 export async function runHeartbeatWorkerOnce(): Promise<{
@@ -226,12 +133,23 @@ export async function runHeartbeatWorkerOnce(): Promise<{
 
     try {
       const options = parseTaskOptions(task.optionsJson);
-      const result = callClaudeCli(
-        task.prompt,
-        task.systemPrompt ?? options.systemPrompt ?? undefined,
-        options,
+      const result = await runnerRouter.run(
+        createRunnerTask({
+          prompt: task.prompt,
+          systemPrompt: task.systemPrompt ?? options.systemPrompt ?? undefined,
+          tier: options.tier,
+          taskType: options.taskType ?? "rewrite",
+          role: options.role ?? "executive",
+          confidenceRequired: options.confidenceRequired ?? "medium",
+          maxTokens: options.maxTokens,
+          temperature: options.temperature,
+          expectJson: options.expectJson,
+          preferredRunner: options.preferredRunner,
+          fallbackRunner: options.fallbackRunner,
+          label: `queue:${task.id}`,
+        }),
       );
-      await writeTaskResult(task.id, result);
+      await writeTaskResult(task.id, result.artifacts.responseText);
       logger.info({ taskId: task.id }, "[WORKER] Task completed");
       results.push({ id: task.id, status: "done" });
     } catch (err) {

@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DepartmentExecutionServiceImpl } from "../src/services/department-execution/index.js";
 import { departmentNotifications } from "../src/db/schema.js";
+import { DepartmentExecutionServiceImpl } from "../src/services/department-execution/index.js";
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = ":memory:";
@@ -71,9 +71,11 @@ describe("CompetitiveAnalysisExecutor", () => {
   it("supports analyze_competitors action", () => {
     const service = buildService();
     const reports = service.collectReports();
-    const caReport = reports.find((r) => r.department === "competitive-analysis");
+    const caReport = reports.find(
+      (r) => r.department === "competitive-analysis",
+    );
     expect(caReport).toBeDefined();
-    expect(caReport!.department).toBe("competitive-analysis");
+    expect(caReport?.department).toBe("competitive-analysis");
   });
 
   it("executes competitor analysis and returns structured result", async () => {
@@ -97,7 +99,9 @@ describe("CompetitiveAnalysisExecutor", () => {
       .select()
       .from(departmentNotifications)
       .all()
-      .sort((left, right) => left.toDepartment.localeCompare(right.toDepartment));
+      .sort((left, right) =>
+        left.toDepartment.localeCompare(right.toDepartment),
+      );
 
     expect(notifications.map((row) => row.toDepartment)).toEqual([
       "command",
@@ -116,6 +120,6 @@ describe("CompetitiveAnalysisExecutor", () => {
       (row) => row.toDepartment === "command",
     );
     expect(commandNotification).toBeDefined();
-    expect(commandNotification!.content).toContain("combinedWinningPatterns");
+    expect(commandNotification?.content).toContain("combinedWinningPatterns");
   });
 });

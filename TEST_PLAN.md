@@ -13,7 +13,7 @@
 - `tests/diff-collector.test.ts` -- 差分収集ロジック
 - `tests/llm-json.test.ts` -- LLM 応答の JSON パース
 - `tests/content-scheduler.test.ts` -- コンテンツスケジューラー (スロット管理、アクション決定)
-- `tests/review-approve.test.ts` -- レビュー承認時のステータス遷移
+- `tests/proposal-flow.test.ts` -- proposal 承認フローのステータス遷移
 
 ### Integration Tests (統合テスト)
 
