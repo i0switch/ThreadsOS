@@ -2804,3 +2804,5 @@
 2026-04-07 19:24:18: {"level":30,"time":1775557458635,"pid":27148,"hostname":"MacBookPro","taskId":"0a7654bb-4056-49b9-9e72-adc4cb013184","msg":"[WORKER] Task completed"}
 2026-04-07 19:24:18: {"level":30,"time":1775557458635,"pid":27148,"hostname":"MacBookPro","processed":1,"tasks":[{"id":"0a7654bb-4056-49b9-9e72-adc4cb013184","status":"done"}],"msg":"[WORKER] Processed tasks"}
 2026-04-07 19:24:19: {"level":30,"time":1775557459817,"pid":27148,"hostname":"MacBookPro","taskId":"79745c79-d90e-4ad0-8188-3d925e862a23","msg":"[WORKER] Processing LLM task via Claude CLI"}
+2026-04-16 21:39:40: [dotenv@17.3.1] injecting env (11) from .env -- tip: 🤖 agentic secret storage: https://dotenvx.com/as2
+2026-04-16 21:39:40: {"level":30,"time":1776343180602,"pid":62828,"hostname":"MacBookPro","msg":"[WORKER] LLM Heartbeat Worker started"}

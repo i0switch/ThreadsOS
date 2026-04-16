@@ -490,6 +490,27 @@ export class MetricsSyncServiceImpl implements MetricsSyncService {
     postsSynced: number;
     metricsSnapshots: number;
   }> {
+    // Pre-flight: verify Threads token health
+    if ("verifyTokenHealth" in threadsApi && typeof (threadsApi as Record<string, unknown>).verifyTokenHealth === "function") {
+      const health = await (threadsApi as { verifyTokenHealth: () => Promise<{ ok: boolean; detail: string }> }).verifyTokenHealth();
+      if (!health.ok) {
+        const ledger = createRuntimeLedgerRepository();
+        ledger.recordAnomaly({
+          category: "threads_token_unhealthy",
+          severity: "high",
+          message: `Threads APIトークンが無効: ${health.detail}`,
+          metadata: { detail: health.detail },
+        });
+        ledger.updateSessionHealth({
+          scope: "threads",
+          provider: "graph_api",
+          state: "degraded",
+          detail: `Token verification failed: ${health.detail}`,
+        });
+        return { postsSynced: 0, metricsSnapshots: 0 };
+      }
+    }
+
     const results = db.select().from(threadPostResults).all();
     const drafts = db.select().from(threadPostDrafts).all();
     const allPublicationEvents = db.select().from(publicationEvents).all();

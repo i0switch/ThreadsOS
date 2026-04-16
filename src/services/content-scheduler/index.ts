@@ -479,7 +479,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
     if (threadResearchAge >= 24) {
       actions.push({
         type: "research_threads",
-        priority: 7,
+        priority: 3,
         reason: `前回Threadsリサーチから${Math.floor(threadResearchAge)}時間経過`,
       });
     }
@@ -502,7 +502,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
     if (noteResearchAge >= 24) {
       actions.push({
         type: "research_note",
-        priority: 8,
+        priority: 3,
         reason: `前回noteリサーチから${Math.floor(noteResearchAge)}時間経過`,
       });
     }
@@ -527,7 +527,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       // 24時間 = 1日（旧: 168時間 = 7日）
       actions.push({
         type: "analyze_competitors",
-        priority: 9,
+        priority: 4,
         reason: `前回競合分析から${Math.floor(competitorAnalysisAge / 24)}日経過`,
       });
     }
@@ -545,7 +545,7 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
     if (snapshotAge >= 6) {
       actions.push({
         type: "fetch_competitor_updates",
-        priority: 11,
+        priority: 5,
         reason: `前回競合スナップショットから${Math.floor(snapshotAge)}時間経過`,
       });
     }

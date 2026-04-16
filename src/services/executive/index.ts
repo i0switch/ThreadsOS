@@ -283,7 +283,11 @@ export class ExecutiveServiceImpl implements ExecutiveService {
 - 部署の推奨を尊重しつつ、全体最適を考える
 - note実績ゼロならnote生成を最優先（ファネル構築）
 - 人間入力があれば最優先で処理
-- 1回のハートビートで1アクションのみ実行（§7: 1 heartbeat = 1 bottleneck改善）
+- 1回のハートビートで最大3アクションまで実行可能（予算制御で上限管理）
+- 必ず「メイン改善1つ + 保全系（リサーチ/競合分析/エンゲージメント取得/通知）」の組合せで選べ
+- 全12機能（Threads6+note6）を均等に回すこと。特定アクションだけ毎回選ぶのは禁止
+- 24時間以上リサーチが止まっていたらリサーチを必ず含めること
+- note公開実績が少なければgenerate_noteを優先すること
 - 各部署のデータに基づいて根拠ある判断をする
 
 ## objectiveの選択肢
@@ -314,7 +318,7 @@ monetization: priceStrategy（premium/standard/value）、conversionFocus（dire
 {
   "objective": "directive_assimilation" | "funnel_expansion" | "engagement_compounding",
   "funnelStage": "bootstrap" | "distribution" | "conversion" | "optimization",
-  "approvedActionTypes": ["single_action_type"],
+  "approvedActionTypes": ["main_action", "maintenance_action_1", "maintenance_action_2"],
   "reasoning": "判断理由を1-2文で",
   "departmentInstructions": {
     "department_name": "この部署への具体的指示"
@@ -610,7 +614,7 @@ ${proposalDetails}
       : [];
     const approvedActions = candidateActions
       .filter((a) => rawApproved.includes(a.type))
-      .slice(0, 1);
+      .slice(0, 3);
     const rawReasoning =
       typeof decision.reasoning === "string" ? decision.reasoning : "";
     const rawInstructions =

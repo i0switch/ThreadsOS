@@ -291,11 +291,24 @@ export class ThreadsGraphApiClient implements ThreadsApiClient {
       }
     }
 
-    logger.warn(
+    logger.error(
       { postId, metric },
-      "Threads insight metric unavailable, defaulting to zero",
+      "Threads insight metric unavailable after all retries — possible token expiry or API issue",
     );
     return 0;
+  }
+
+  /** Check if the current access token is still valid */
+  async verifyTokenHealth(): Promise<{ ok: boolean; detail: string }> {
+    try {
+      await this.getUserProfile();
+      return { ok: true, detail: "token is valid" };
+    } catch (error) {
+      return {
+        ok: false,
+        detail: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async getInsights(postId: string): Promise<{

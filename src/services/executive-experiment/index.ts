@@ -1061,7 +1061,28 @@ export class ExecutiveExperimentServiceImpl
         .from(experiments)
         .where(eq(experiments.id, resultRow.experimentId))
         .get();
-      if (!experiment?.launchedAt) {
+      if (!experiment) {
+        continue;
+      }
+      // launchedAt が未設定 = canary が実際に投入されなかった → reject して次へ
+      if (!experiment.launchedAt) {
+        const measuredAt = nowIso(now);
+        db.update(experimentResults)
+          .set({
+            status: "measured",
+            measuredAt,
+            outcome: "reject",
+            note: "launchedAt未設定: canaryが投入されなかったため自動reject",
+            updatedAt: measuredAt,
+          })
+          .where(eq(experimentResults.id, resultRow.id))
+          .run();
+        db.update(experiments)
+          .set({ status: "rejected", rejectedAt: measuredAt, updatedAt: measuredAt })
+          .where(eq(experiments.id, experiment.id))
+          .run();
+        rejectedCount += 1;
+        summaries.push(`${experiment.id}:${resultRow.windowHours}h:reject:launchedAt未設定`);
         continue;
       }
 
