@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
+import { getCurrentHeartbeatId } from "../../app/heartbeat-context.js";
 import { logger } from "../../app/logger.js";
 import { loadEnv } from "../../config/env.js";
 import { db } from "../../db/index.js";
@@ -85,6 +86,7 @@ export interface LlmRunner {
 
 export interface RunnerHealthStore {
   canUse(runner: RunnerName): boolean;
+  tryAcquireCooldownProbe(runner: RunnerName): boolean;
   recordSuccess(
     runner: RunnerName,
     details: { durationMs: number; model: string },
@@ -115,14 +117,12 @@ function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
 }
 
-function inferCircuitStatus(
-  samples: {
-    consecutiveFailures: number;
-    timeoutCount: number;
-    invalidJsonCount: number;
-    totalCalls: number;
-  },
-): "healthy" | "degraded" | "tripped" {
+function inferCircuitStatus(samples: {
+  consecutiveFailures: number;
+  timeoutCount: number;
+  invalidJsonCount: number;
+  totalCalls: number;
+}): "healthy" | "degraded" | "tripped" {
   const env = loadEnv();
   if (samples.consecutiveFailures >= env.LLM_RUNNER_CIRCUIT_FAILURE_THRESHOLD) {
     return "tripped";
@@ -140,6 +140,114 @@ function inferCircuitStatus(
   return samples.consecutiveFailures > 0 ? "degraded" : "healthy";
 }
 
+function isCircuitCooldownExpired(
+  lastFailureAt: string | null | undefined,
+): boolean {
+  if (!lastFailureAt) {
+    return false;
+  }
+  const failedAt = new Date(lastFailureAt).getTime();
+  if (Number.isNaN(failedAt)) {
+    return false;
+  }
+  return Date.now() - failedAt >= loadEnv().LLM_RUNNER_CIRCUIT_COOLDOWN_MS;
+}
+
+const COOLDOWN_PROBE_LOCK = "__cooldown_probe_pending__";
+const COOLDOWN_PROBE_LOCK_PREFIX = `${COOLDOWN_PROBE_LOCK}:`;
+
+function createCooldownProbeLock(): string {
+  return `${COOLDOWN_PROBE_LOCK_PREFIX}${Date.now()}`;
+}
+
+function isActiveCooldownProbeLock(
+  lastError: string | null | undefined,
+): boolean {
+  if (!lastError?.startsWith(COOLDOWN_PROBE_LOCK_PREFIX)) {
+    return false;
+  }
+  const lockCreatedAt = Number(
+    lastError.slice(COOLDOWN_PROBE_LOCK_PREFIX.length),
+  );
+  if (Number.isNaN(lockCreatedAt)) {
+    return false;
+  }
+  return Date.now() - lockCreatedAt < loadEnv().LLM_RUNNER_CIRCUIT_COOLDOWN_MS;
+}
+
+function buildCooldownProbePredicate(
+  runner: RunnerName,
+  state: {
+    lastFailureAt: string | null;
+    lastError: string | null;
+  },
+) {
+  if (state.lastFailureAt == null) {
+    throw new Error("Cooldown probe predicate requires lastFailureAt");
+  }
+
+  return and(
+    eq(runnerHealth.runner, runner),
+    eq(runnerHealth.status, "tripped"),
+    eq(runnerHealth.lastFailureAt, state.lastFailureAt),
+    state.lastError == null
+      ? isNull(runnerHealth.lastError)
+      : eq(runnerHealth.lastError, state.lastError),
+  );
+}
+
+function acquireCooldownProbeLock(
+  runner: RunnerName,
+  state: {
+    lastFailureAt: string | null;
+    lastError: string | null;
+  },
+): boolean {
+  const claim = db
+    .update(runnerHealth)
+    .set({
+      lastError: createCooldownProbeLock(),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(buildCooldownProbePredicate(runner, state))
+    .run();
+  return claim.changes > 0;
+}
+
+function releaseExpiredCooldownProbeLock(
+  runner: RunnerName,
+  state: {
+    lastFailureAt: string | null;
+    lastError: string | null;
+  },
+): boolean {
+  if (!state.lastError?.startsWith(COOLDOWN_PROBE_LOCK_PREFIX)) {
+    return false;
+  }
+  const release = db
+    .update(runnerHealth)
+    .set({
+      lastError: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(buildCooldownProbePredicate(runner, state))
+    .run();
+  return release.changes > 0;
+}
+
+function isCooldownProbeEligible(state: {
+  lastFailureAt: string | null;
+  lastError: string | null;
+}): boolean {
+  if (!isCircuitCooldownExpired(state.lastFailureAt)) {
+    return false;
+  }
+  if (!state.lastError?.startsWith(COOLDOWN_PROBE_LOCK_PREFIX)) {
+    return true;
+  }
+  return !isActiveCooldownProbeLock(state.lastError);
+}
+
 class DbRunnerHealthStore implements RunnerHealthStore {
   canUse(runner: RunnerName): boolean {
     const state = db
@@ -147,7 +255,51 @@ class DbRunnerHealthStore implements RunnerHealthStore {
       .from(runnerHealth)
       .where(eq(runnerHealth.runner, runner))
       .get();
-    return state?.status !== "tripped";
+    if (!state) {
+      return true;
+    }
+    if (state.status !== "tripped") {
+      return true;
+    }
+    return isCooldownProbeEligible({
+      lastFailureAt: state.lastFailureAt,
+      lastError: state.lastError ?? null,
+    });
+  }
+
+  tryAcquireCooldownProbe(runner: RunnerName): boolean {
+    const state = db
+      .select()
+      .from(runnerHealth)
+      .where(eq(runnerHealth.runner, runner))
+      .get();
+    if (!state || state.status !== "tripped") {
+      return true;
+    }
+    if (
+      !isCooldownProbeEligible({
+        lastFailureAt: state.lastFailureAt,
+        lastError: state.lastError ?? null,
+      })
+    ) {
+      return false;
+    }
+    if (!state.lastError?.startsWith(COOLDOWN_PROBE_LOCK_PREFIX)) {
+      return acquireCooldownProbeLock(runner, {
+        lastFailureAt: state.lastFailureAt,
+        lastError: state.lastError ?? null,
+      });
+    }
+    return (
+      releaseExpiredCooldownProbeLock(runner, {
+        lastFailureAt: state.lastFailureAt,
+        lastError: state.lastError ?? null,
+      }) &&
+      acquireCooldownProbeLock(runner, {
+        lastFailureAt: state.lastFailureAt,
+        lastError: null,
+      })
+    );
   }
 
   recordSuccess(
@@ -270,17 +422,30 @@ function computeBudgetPeriodKey(scope: BudgetScope, now: Date): string {
 function resolveBudgetLimits(
   scope: BudgetScope,
   env: ReturnType<typeof loadEnv>,
+  runner: RunnerName,
 ): { tokensLimit: number; callsLimit: number } {
   switch (scope) {
     case "daily":
       return {
-        tokensLimit: env.LLM_RUNNER_DAILY_TOKENS_LIMIT,
-        callsLimit: env.LLM_RUNNER_DAILY_CALLS_LIMIT,
+        tokensLimit:
+          runner === "copilot"
+            ? env.LLM_RUNNER_COPILOT_DAILY_TOKENS_LIMIT
+            : env.LLM_RUNNER_DAILY_TOKENS_LIMIT,
+        callsLimit:
+          runner === "copilot"
+            ? env.LLM_RUNNER_COPILOT_DAILY_CALLS_LIMIT
+            : env.LLM_RUNNER_DAILY_CALLS_LIMIT,
       };
     case "hourly":
       return {
-        tokensLimit: env.LLM_RUNNER_HOURLY_TOKENS_LIMIT,
-        callsLimit: env.LLM_RUNNER_HOURLY_CALLS_LIMIT,
+        tokensLimit:
+          runner === "copilot"
+            ? env.LLM_RUNNER_COPILOT_HOURLY_TOKENS_LIMIT
+            : env.LLM_RUNNER_HOURLY_TOKENS_LIMIT,
+        callsLimit:
+          runner === "copilot"
+            ? env.LLM_RUNNER_COPILOT_HOURLY_CALLS_LIMIT
+            : env.LLM_RUNNER_HOURLY_CALLS_LIMIT,
       };
     case "5h":
       return {
@@ -303,7 +468,7 @@ class DbRunnerBudgetGovernor implements RunnerBudgetGovernor {
     const now = new Date();
     const periodKey = computeBudgetPeriodKey(scope, now);
     const nowIso = now.toISOString();
-    const limits = resolveBudgetLimits(scope, env);
+    const limits = resolveBudgetLimits(scope, env, runner);
     db.insert(runnerBudgets)
       .values({
         id: randomUUID(),
@@ -338,7 +503,27 @@ class DbRunnerBudgetGovernor implements RunnerBudgetGovernor {
     }));
   }
 
+  private shouldBypassBudgetForHeartbeatFallback(
+    runner: RunnerName,
+    task: RunnerTask,
+  ): boolean {
+    if (runner !== "copilot") {
+      return false;
+    }
+    if (process.env.THREADOS_INTERNAL !== "1") {
+      return false;
+    }
+    if (!getCurrentHeartbeatId()) {
+      return false;
+    }
+    return pickRunnerOrder(task)[0] !== "copilot";
+  }
+
   canRun(runner: RunnerName, task: RunnerTask): boolean {
+    if (this.shouldBypassBudgetForHeartbeatFallback(runner, task)) {
+      return true;
+    }
+
     const budgets = this.ensureAllScopes(runner);
     const promptTokens = estimateTokens(task.prompt);
     for (const { row } of budgets) {
@@ -558,16 +743,16 @@ export class ClaudeCodeRunner implements LlmRunner {
       );
     }
 
+    let parsedOutput: ReturnType<typeof parseClaudeJsonOutput>;
     try {
-      const parsed = parseClaudeJsonOutput(stdout);
-      return {
-        responseText: parsed.responseText,
-        rawOutput: stdout,
-        durationMs: Date.now() - start,
-        model: resolveClaudeCliModel(task.tier),
-        estimatedTokens: parsed.estimatedTokens,
-      };
+      parsedOutput = parseClaudeJsonOutput(stdout);
     } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Claude CLI 結果エラー:")
+      ) {
+        throw new RoutedRunnerError(this.name, "process_error", error.message);
+      }
       logger.warn(
         {
           error: error instanceof Error ? error.message : String(error),
@@ -583,6 +768,14 @@ export class ClaudeCodeRunner implements LlmRunner {
         estimatedTokens: estimateTokens(stdout),
       };
     }
+
+    return {
+      responseText: parsedOutput.responseText,
+      rawOutput: stdout,
+      durationMs: Date.now() - start,
+      model: resolveClaudeCliModel(task.tier),
+      estimatedTokens: parsedOutput.estimatedTokens,
+    };
   }
 }
 
@@ -596,7 +789,7 @@ export class CodexCliRunner implements LlmRunner {
     const prompt = buildPromptEnvelope(task);
     const args = [
       "exec",
-      prompt,
+      "-",
       "--model",
       resolveCodexModel(task.tier),
       "--dangerously-bypass-approvals-and-sandbox",
@@ -609,10 +802,12 @@ export class CodexCliRunner implements LlmRunner {
     ];
 
     const result = spawnSync("codex", args, {
+      input: prompt,
       encoding: "utf-8",
       timeout: timeoutMs,
       maxBuffer: 4 * 1024 * 1024,
       env: { ...process.env, THREADOS_INTERNAL: "1" },
+      shell: process.platform === "win32",
     });
 
     if (result.error) {
@@ -626,14 +821,28 @@ export class CodexCliRunner implements LlmRunner {
       );
     }
 
-    const rawOutput = readFileSync(outputPath, "utf-8").trim();
-    rmSync(outputPath, { force: true });
-
-    if (result.status !== 0 && !rawOutput) {
+    if (result.status !== 0) {
+      rmSync(outputPath, { force: true });
       throw new RoutedRunnerError(
         this.name,
         "process_error",
-        `Codex CLI エラー (${result.status}): ${result.stderr?.trim() ?? ""}`,
+        `Codex CLI エラー (${result.status}): ${result.stderr?.trim() ?? result.stdout?.trim() ?? ""}`,
+      );
+    }
+
+    let rawOutput = "";
+    try {
+      rawOutput = readFileSync(outputPath, "utf-8").trim();
+    } catch {
+      rawOutput = result.stdout?.trim() ?? "";
+    }
+    rmSync(outputPath, { force: true });
+
+    if (!rawOutput) {
+      throw new RoutedRunnerError(
+        this.name,
+        "process_error",
+        `Codex CLI: 出力なし (status=${result.status})`,
       );
     }
 
@@ -660,11 +869,12 @@ export class CopilotCliRunner implements LlmRunner {
       [
         scriptPath,
         randomUUID(),
-        prompt,
+        "--stdin-prompt",
         "--model",
         resolveCopilotModel(task.tier),
       ],
       {
+        input: prompt,
         encoding: "utf-8",
         timeout: timeoutMs,
         maxBuffer: 4 * 1024 * 1024,
@@ -740,8 +950,16 @@ function pickRunnerOrder(task: RunnerTask): RunnerName[] {
 
   const fallback =
     task.fallbackRunner ?? (preferred === "claude" ? "codex" : "claude");
+  const tertiary =
+    preferred === "copilot" || fallback === "copilot"
+      ? undefined
+      : ("copilot" as const);
 
-  return Array.from(new Set<RunnerName>([preferred, fallback, "copilot"]));
+  return Array.from(
+    new Set<RunnerName>(
+      [preferred, fallback, tertiary].filter(Boolean) as RunnerName[],
+    ),
+  );
 }
 
 export function createRunnerTask(input: {
@@ -814,6 +1032,14 @@ export function createRunnerRouter(options?: {
             runnerName,
             "budget_exceeded",
             `${runnerName} runner budget exceeded`,
+          );
+          continue;
+        }
+        if (!healthStore.tryAcquireCooldownProbe(runnerName)) {
+          lastError = new RoutedRunnerError(
+            runnerName,
+            "circuit_open",
+            `${runnerName} runner is circuit-open`,
           );
           continue;
         }

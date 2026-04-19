@@ -1,4 +1,4 @@
-import { desc, eq, gte } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import * as s from "../../db/schema.js";
 import {
@@ -710,20 +710,23 @@ const EXPERIMENT_STATUS_LABELS: Record<string, string> = {
   rejected: "不採用",
 };
 
-const RUNNER_STATUS_LABELS: Record<string, string> = {
+const _RUNNER_STATUS_LABELS: Record<string, string> = {
   healthy: "正常",
   degraded: "劣化",
   tripped: "停止判定",
 };
 
-const AUDITOR_LABELS: Record<string, string> = {
+const _AUDITOR_LABELS: Record<string, string> = {
   pass: "通過",
   rewrite: "要修正",
   skip: "見送り",
   quarantine: "隔離",
 };
 
-function ja(dict: Record<string, string>, key: string | null | undefined): string {
+function ja(
+  dict: Record<string, string>,
+  key: string | null | undefined,
+): string {
   return dict[key ?? ""] ?? key ?? "不明";
 }
 
@@ -744,7 +747,12 @@ export interface DashboardMission {
 
 export function getDashboardMission(): DashboardMission {
   const modeRow = db.select().from(s.operationsModeState).limit(1).get();
-  const cycle = db.select().from(s.executiveCycles).orderBy(desc(s.executiveCycles.startedAt)).limit(1).get();
+  const cycle = db
+    .select()
+    .from(s.executiveCycles)
+    .orderBy(desc(s.executiveCycles.startedAt))
+    .limit(1)
+    .get();
 
   let objective = "funnel_expansion";
   let funnelStage = "bootstrap";
@@ -754,16 +762,28 @@ export function getDashboardMission(): DashboardMission {
 
   if (cycle?.decisionJson) {
     try {
-      const decision = JSON.parse(cycle.decisionJson) as Record<string, unknown>;
+      const decision = JSON.parse(cycle.decisionJson) as Record<
+        string,
+        unknown
+      >;
       reasoning = (decision.llmReasoning as string) ?? "";
-      const approved = decision.approvedActions as Array<{ type: string }> | undefined;
+      const approved = decision.approvedActions as
+        | Array<{ type: string }>
+        | undefined;
       if (approved?.[0]) currentAction = approved[0].type;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   objective = cycle?.objective ?? objective;
   funnelStage = cycle?.funnelStage ?? funnelStage;
 
-  const latestExp = db.select().from(s.experiments).orderBy(desc(s.experiments.createdAt)).limit(1).get();
+  const latestExp = db
+    .select()
+    .from(s.experiments)
+    .orderBy(desc(s.experiments.createdAt))
+    .limit(1)
+    .get();
   if (latestExp) nextMetric = latestExp.primaryMetric;
 
   return {
@@ -805,7 +825,12 @@ export interface DashboardRevenue {
 }
 
 export function getDashboardRevenue(): DashboardRevenue {
-  const latest = db.select().from(s.funnelSnapshots).orderBy(desc(s.funnelSnapshots.capturedAt)).limit(1).get();
+  const latest = db
+    .select()
+    .from(s.funnelSnapshots)
+    .orderBy(desc(s.funnelSnapshots.capturedAt))
+    .limit(1)
+    .get();
   const funnel = {
     impressions: latest?.impressions ?? 0,
     profileTransitions: latest?.profileTransitions ?? 0,
@@ -816,9 +841,24 @@ export function getDashboardRevenue(): DashboardRevenue {
   };
 
   const stages = [
-    { key: "reach", label: "認知", num: funnel.profileTransitions, den: funnel.impressions },
-    { key: "click", label: "導線クリック", num: funnel.noteClicks, den: funnel.profileTransitions },
-    { key: "read", label: "記事閲覧", num: funnel.noteViews, den: funnel.noteClicks },
+    {
+      key: "reach",
+      label: "認知",
+      num: funnel.profileTransitions,
+      den: funnel.impressions,
+    },
+    {
+      key: "click",
+      label: "導線クリック",
+      num: funnel.noteClicks,
+      den: funnel.profileTransitions,
+    },
+    {
+      key: "read",
+      label: "記事閲覧",
+      num: funnel.noteViews,
+      den: funnel.noteClicks,
+    },
     { key: "buy", label: "購入", num: funnel.purchases, den: funnel.noteViews },
   ];
   const funnelRates = stages.map((st) => ({
@@ -826,11 +866,19 @@ export function getDashboardRevenue(): DashboardRevenue {
     value: st.den > 0 ? `${((st.num / st.den) * 100).toFixed(1)}%` : "0.0%",
     context: `${st.num}/${st.den}`,
   }));
-  const weakest = stages.filter((st) => st.den > 0).sort((a, b) => a.num / a.den - b.num / b.den)[0];
+  const weakest = stages
+    .filter((st) => st.den > 0)
+    .sort((a, b) => a.num / a.den - b.num / b.den)[0];
 
   const allRevenue = db.select().from(s.revenueEvents).all();
-  const totalRevenueYen = allRevenue.reduce((sum, r) => sum + (r.amountYen ?? 0), 0);
-  const totalPurchases = allRevenue.reduce((sum, r) => sum + (r.purchasesCount ?? 0), 0);
+  const totalRevenueYen = allRevenue.reduce(
+    (sum, r) => sum + (r.amountYen ?? 0),
+    0,
+  );
+  const totalPurchases = allRevenue.reduce(
+    (sum, r) => sum + (r.purchasesCount ?? 0),
+    0,
+  );
 
   return {
     generatedAt: new Date().toISOString(),
@@ -839,7 +887,9 @@ export function getDashboardRevenue(): DashboardRevenue {
     weakestStage: {
       key: weakest?.key ?? null,
       label: weakest?.label ?? "未判定",
-      reason: weakest ? `${weakest.label} が最も落ち込んでいます (${funnelRates.find((r) => r.label === weakest.label)?.value})` : "分母が不足しているため判定保留",
+      reason: weakest
+        ? `${weakest.label} が最も落ち込んでいます (${funnelRates.find((r) => r.label === weakest.label)?.value})`
+        : "分母が不足しているため判定保留",
     },
     totalRevenueYen,
     totalPurchases,
@@ -860,11 +910,21 @@ export interface DashboardExecutive {
   departmentInstructions: Record<string, string>;
   contentGuidance: Record<string, unknown> | null;
   policyUpdates: Record<string, unknown> | null;
-  recentHistory: Array<{ objective: string; funnelStage: string; reasoning: string; createdAt: string }>;
+  recentHistory: Array<{
+    objective: string;
+    funnelStage: string;
+    reasoning: string;
+    createdAt: string;
+  }>;
 }
 
 export function getDashboardExecutive(): DashboardExecutive {
-  const cycle = db.select().from(s.executiveCycles).orderBy(desc(s.executiveCycles.startedAt)).limit(1).get();
+  const cycle = db
+    .select()
+    .from(s.executiveCycles)
+    .orderBy(desc(s.executiveCycles.startedAt))
+    .limit(1)
+    .get();
   let reasoning = "";
   let approved: Array<{ type: string; reason: string }> = [];
   let skipped: Array<{ type: string; reason: string }> = [];
@@ -876,20 +936,39 @@ export function getDashboardExecutive(): DashboardExecutive {
     try {
       const d = JSON.parse(cycle.decisionJson) as Record<string, unknown>;
       reasoning = (d.llmReasoning as string) ?? "";
-      approved = ((d.approvedActions ?? []) as Array<{ type: string; reason?: string }>).map((a) => ({ type: a.type, reason: a.reason ?? "" }));
-      skipped = ((d.skippedActions ?? []) as Array<{ action?: { type: string }; type?: string; reason: string }>).map((s) => ({ type: s.action?.type ?? s.type ?? "", reason: s.reason }));
+      approved = (
+        (d.approvedActions ?? []) as Array<{ type: string; reason?: string }>
+      ).map((a) => ({ type: a.type, reason: a.reason ?? "" }));
+      skipped = (
+        (d.skippedActions ?? []) as Array<{
+          action?: { type: string };
+          type?: string;
+          reason: string;
+        }>
+      ).map((s) => ({
+        type: s.action?.type ?? s.type ?? "",
+        reason: s.reason,
+      }));
       instructions = (d.departmentInstructions as Record<string, string>) ?? {};
       guidance = (d.contentGuidance as Record<string, unknown>) ?? null;
       policyUp = (d.policyUpdates as Record<string, unknown>) ?? null;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
-  const history = db.select().from(s.strategyHistory).orderBy(desc(s.strategyHistory.createdAt)).limit(5).all().map((h) => ({
-    objective: ja(OBJECTIVE_LABELS, h.objective),
-    funnelStage: ja(STAGE_LABELS, h.funnelStage),
-    reasoning: h.reasoning.slice(0, 200),
-    createdAt: h.createdAt,
-  }));
+  const history = db
+    .select()
+    .from(s.strategyHistory)
+    .orderBy(desc(s.strategyHistory.createdAt))
+    .limit(5)
+    .all()
+    .map((h) => ({
+      objective: ja(OBJECTIVE_LABELS, h.objective),
+      funnelStage: ja(STAGE_LABELS, h.funnelStage),
+      reasoning: h.reasoning.slice(0, 200),
+      createdAt: h.createdAt,
+    }));
 
   return {
     generatedAt: new Date().toISOString(),
@@ -912,7 +991,12 @@ export interface DashboardDepartment {
   label: string;
   lastSummary: string | null;
   lastRunAt: string | null;
-  recentNotifications: Array<{ from: string; type: string; content: string; createdAt: string }>;
+  recentNotifications: Array<{
+    from: string;
+    type: string;
+    content: string;
+    createdAt: string;
+  }>;
 }
 
 export interface DashboardDepartments {
@@ -929,19 +1013,44 @@ const DEPT_LABELS: Record<string, string> = {
 };
 
 export function getDashboardDepartments(): DashboardDepartments {
-  const depts = ["command", "external-research", "competitive-analysis", "threads", "note"];
+  const depts = [
+    "command",
+    "external-research",
+    "competitive-analysis",
+    "threads",
+    "note",
+  ];
 
   return {
     generatedAt: new Date().toISOString(),
     departments: depts.map((name) => {
-      const summary = db.select().from(s.departmentSummaries).where(eq(s.departmentSummaries.department, name)).orderBy(desc(s.departmentSummaries.updatedAt)).limit(1).get();
-      const lastRun = db.select().from(s.departmentRuns).where(eq(s.departmentRuns.department, name)).orderBy(desc(s.departmentRuns.createdAt)).limit(1).get();
-      const notifications = db.select().from(s.departmentNotifications).where(eq(s.departmentNotifications.toDepartment, name)).orderBy(desc(s.departmentNotifications.createdAt)).limit(3).all().map((n) => ({
-        from: DEPT_LABELS[n.fromDepartment] ?? n.fromDepartment,
-        type: n.notificationType,
-        content: n.content.slice(0, 200),
-        createdAt: n.createdAt,
-      }));
+      const summary = db
+        .select()
+        .from(s.departmentSummaries)
+        .where(eq(s.departmentSummaries.department, name))
+        .orderBy(desc(s.departmentSummaries.updatedAt))
+        .limit(1)
+        .get();
+      const lastRun = db
+        .select()
+        .from(s.departmentRuns)
+        .where(eq(s.departmentRuns.department, name))
+        .orderBy(desc(s.departmentRuns.createdAt))
+        .limit(1)
+        .get();
+      const notifications = db
+        .select()
+        .from(s.departmentNotifications)
+        .where(eq(s.departmentNotifications.toDepartment, name))
+        .orderBy(desc(s.departmentNotifications.createdAt))
+        .limit(3)
+        .all()
+        .map((n) => ({
+          from: DEPT_LABELS[n.fromDepartment] ?? n.fromDepartment,
+          type: n.notificationType,
+          content: n.content.slice(0, 200),
+          createdAt: n.createdAt,
+        }));
 
       return {
         name,
@@ -978,24 +1087,50 @@ export interface DashboardExperiments {
   active: DashboardExperiment[];
   winCount: number;
   loseCount: number;
-  recentWins: Array<{ patternKey: string; metric: string; observedValue: number; createdAt: string }>;
-  recentLosses: Array<{ patternKey: string; metric: string; observedValue: number; createdAt: string }>;
+  recentWins: Array<{
+    patternKey: string;
+    metric: string;
+    observedValue: number;
+    createdAt: string;
+  }>;
+  recentLosses: Array<{
+    patternKey: string;
+    metric: string;
+    observedValue: number;
+    createdAt: string;
+  }>;
 }
 
 export function getDashboardExperiments(): DashboardExperiments {
-  const active = db.select().from(s.experiments).where(
-    eq(s.experiments.status, "planned"),
-  ).all();
-  const canary = db.select().from(s.experiments).where(
-    eq(s.experiments.status, "canary_live"),
-  ).all();
-  const awaiting = db.select().from(s.experiments).where(
-    eq(s.experiments.status, "awaiting_72h"),
-  ).all();
+  const active = db
+    .select()
+    .from(s.experiments)
+    .where(eq(s.experiments.status, "planned"))
+    .all();
+  const canary = db
+    .select()
+    .from(s.experiments)
+    .where(eq(s.experiments.status, "canary_live"))
+    .all();
+  const awaiting = db
+    .select()
+    .from(s.experiments)
+    .where(eq(s.experiments.status, "awaiting_72h"))
+    .all();
   const allActive = [...active, ...canary, ...awaiting];
 
-  const wins = db.select().from(s.winningPatterns).orderBy(desc(s.winningPatterns.createdAt)).limit(5).all();
-  const losses = db.select().from(s.losingPatterns).orderBy(desc(s.losingPatterns.createdAt)).limit(5).all();
+  const wins = db
+    .select()
+    .from(s.winningPatterns)
+    .orderBy(desc(s.winningPatterns.createdAt))
+    .limit(5)
+    .all();
+  const losses = db
+    .select()
+    .from(s.losingPatterns)
+    .orderBy(desc(s.losingPatterns.createdAt))
+    .limit(5)
+    .all();
 
   return {
     generatedAt: new Date().toISOString(),
@@ -1015,8 +1150,18 @@ export function getDashboardExperiments(): DashboardExperiments {
     })),
     winCount: db.select().from(s.winningPatterns).all().length,
     loseCount: db.select().from(s.losingPatterns).all().length,
-    recentWins: wins.map((w) => ({ patternKey: w.patternKey, metric: w.primaryMetric, observedValue: w.observedValue, createdAt: w.createdAt })),
-    recentLosses: losses.map((l) => ({ patternKey: l.patternKey, metric: l.primaryMetric, observedValue: l.observedValue, createdAt: l.createdAt })),
+    recentWins: wins.map((w) => ({
+      patternKey: w.patternKey,
+      metric: w.primaryMetric,
+      observedValue: w.observedValue,
+      createdAt: w.createdAt,
+    })),
+    recentLosses: losses.map((l) => ({
+      patternKey: l.patternKey,
+      metric: l.primaryMetric,
+      observedValue: l.observedValue,
+      createdAt: l.createdAt,
+    })),
   };
 }
 

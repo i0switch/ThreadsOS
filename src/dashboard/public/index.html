@@ -85,7 +85,7 @@
   <div id="app"><div class="loading">読み込み中...</div></div>
 
   <script>
-    const $ = (id) => document.getElementById(id);
+    const _$ = (id) => document.getElementById(id);
     const h = (s) => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 
     function modeBadge(key) {
@@ -115,9 +115,9 @@
         { label: 'noteクリック', val: d.funnel.noteClicks },
         { label: 'note閲覧', val: d.funnel.noteViews },
         { label: '購入', val: d.funnel.purchases },
-        { label: '売上', val: d.funnel.revenue + '円' },
+        { label: '売上', val: `${d.funnel.revenue}円` },
       ];
-      const weakKey = d.weakestStage.key;
+      const _weakKey = d.weakestStage.key;
       const funnelHtml = steps.map((s, i) => {
         const rate = d.funnelRates[i] ? d.funnelRates[i].value : '';
         const isWeak = d.funnelRates[i] && d.funnelRates[i].label === d.weakestStage.label;

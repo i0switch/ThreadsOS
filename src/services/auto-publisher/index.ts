@@ -117,17 +117,33 @@ function loadPricingPolicy(): PricingPolicyThresholds {
     const policy = store.policies.find((p) => p.id === "pricing");
     const t = policy?.thresholds ?? {};
     return {
-      priceTiers: Array.isArray(t.priceTiers) ? (t.priceTiers as number[]) : FALLBACK_PRICING.priceTiers,
-      freeThresholdChars: Number(t.freeThresholdChars) || FALLBACK_PRICING.freeThresholdChars,
-      paidTierChars: Array.isArray(t.paidTierChars) ? (t.paidTierChars as number[]) : FALLBACK_PRICING.paidTierChars,
-      targetConversionRate: Number(t.targetConversionRate) || FALLBACK_PRICING.targetConversionRate,
-      priceUpConversionRate: Number(t.priceUpConversionRate) || FALLBACK_PRICING.priceUpConversionRate,
-      priceUpPurchases: Number(t.priceUpPurchases) || FALLBACK_PRICING.priceUpPurchases,
-      priceUpRevenueYen: Number(t.priceUpRevenueYen) || FALLBACK_PRICING.priceUpRevenueYen,
-      priceDownMinViews: Number(t.priceDownMinViews) || FALLBACK_PRICING.priceDownMinViews,
-      priceDownMaxPurchases: Number(t.priceDownMaxPurchases) || FALLBACK_PRICING.priceDownMaxPurchases,
-      priceDownMaxConversionRate: Number(t.priceDownMaxConversionRate) || FALLBACK_PRICING.priceDownMaxConversionRate,
-      priceDownFreeChars: Number(t.priceDownFreeChars) || FALLBACK_PRICING.priceDownFreeChars,
+      priceTiers: Array.isArray(t.priceTiers)
+        ? (t.priceTiers as number[])
+        : FALLBACK_PRICING.priceTiers,
+      freeThresholdChars:
+        Number(t.freeThresholdChars) || FALLBACK_PRICING.freeThresholdChars,
+      paidTierChars: Array.isArray(t.paidTierChars)
+        ? (t.paidTierChars as number[])
+        : FALLBACK_PRICING.paidTierChars,
+      targetConversionRate:
+        Number(t.targetConversionRate) || FALLBACK_PRICING.targetConversionRate,
+      priceUpConversionRate:
+        Number(t.priceUpConversionRate) ||
+        FALLBACK_PRICING.priceUpConversionRate,
+      priceUpPurchases:
+        Number(t.priceUpPurchases) || FALLBACK_PRICING.priceUpPurchases,
+      priceUpRevenueYen:
+        Number(t.priceUpRevenueYen) || FALLBACK_PRICING.priceUpRevenueYen,
+      priceDownMinViews:
+        Number(t.priceDownMinViews) || FALLBACK_PRICING.priceDownMinViews,
+      priceDownMaxPurchases:
+        Number(t.priceDownMaxPurchases) ||
+        FALLBACK_PRICING.priceDownMaxPurchases,
+      priceDownMaxConversionRate:
+        Number(t.priceDownMaxConversionRate) ||
+        FALLBACK_PRICING.priceDownMaxConversionRate,
+      priceDownFreeChars:
+        Number(t.priceDownFreeChars) || FALLBACK_PRICING.priceDownFreeChars,
     };
   } catch (error) {
     pricingLogger.warn(
@@ -210,9 +226,8 @@ function determineNotePrice(
 
   let priceYen: number;
   let reason = "本文長ベースの初期価格";
-  const [midChar, highChar] = pp.paidTierChars.length >= 2
-    ? pp.paidTierChars
-    : [5000, 8000];
+  const [midChar, highChar] =
+    pp.paidTierChars.length >= 2 ? pp.paidTierChars : [5000, 8000];
   if (charCount < midChar) {
     priceYen = pp.priceTiers[1] ?? 690;
   } else if (charCount < highChar) {
@@ -255,7 +270,10 @@ function determineNotePrice(
         };
       }
 
-      priceYen = normalizePriceToTier(Math.max(pp.priceTiers[0] ?? 490, priceYen - 200), pp.priceTiers);
+      priceYen = normalizePriceToTier(
+        Math.max(pp.priceTiers[0] ?? 490, priceYen - 200),
+        pp.priceTiers,
+      );
       reason = "既存記事の購入率が弱いため価格を引き下げ";
     } else if (
       history.averageConversionRate >= pp.targetConversionRate &&

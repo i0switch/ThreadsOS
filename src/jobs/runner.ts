@@ -105,6 +105,37 @@ export async function runJob(
     throw error;
   }
 
+  let shutdownTriggered = false;
+  const gracefulShutdown = (signal: string): void => {
+    if (shutdownTriggered) return;
+    shutdownTriggered = true;
+    try {
+      db.update(scheduledJobRuns)
+        .set({
+          status: "aborted",
+          finishedAt: new Date().toISOString(),
+          resultSummary: `Aborted by signal ${signal} (pm2 cron_restart or external stop)`,
+        })
+        .where(eq(scheduledJobRuns.id, runId))
+        .run();
+      ledger.releaseJobLease(leaseKey, runId);
+      jobLogger.warn({ signal }, "Job aborted by signal — lease released");
+    } catch (err) {
+      jobLogger.warn(
+        { error: err instanceof Error ? err.message : String(err) },
+        "Failed to cleanup on signal",
+      );
+    }
+    process.exit(signal === "SIGINT" ? 130 : 143);
+  };
+  process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.once("SIGINT", () => gracefulShutdown("SIGINT"));
+  if (process.platform === "win32") {
+    process.once("SIGBREAK" as NodeJS.Signals, () =>
+      gracefulShutdown("SIGBREAK"),
+    );
+  }
+
   try {
     const summary = await execute({ dryRun, logger: jobLogger });
 

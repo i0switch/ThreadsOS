@@ -47,7 +47,7 @@ describe("Server", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/html");
-    expect(response.body).toContain("<title>ThreadsOS Observation</title>");
+    expect(response.body).toContain("<title>ThreadsOS 司令室</title>");
     await app.close();
   });
 
@@ -99,7 +99,7 @@ describe("Server", () => {
       },
     });
     expect(allowed.statusCode).toBe(200);
-    expect(allowed.body).toContain("<title>ThreadsOS Observation</title>");
+    expect(allowed.body).toContain("<title>ThreadsOS 司令室</title>");
     await app.close();
   });
 });

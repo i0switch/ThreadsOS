@@ -135,7 +135,6 @@ async function seedObservationState() {
       createdAt: now,
     })
     .run();
-
 }
 
 beforeAll(async () => {

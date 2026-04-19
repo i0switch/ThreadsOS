@@ -19,11 +19,14 @@ let schema: SchemaModule;
 let ExecutiveServiceImpl: ExecutiveServiceCtor;
 
 class MockLlmClient implements LlmClient {
-  constructor(private response: string) {}
+  constructor(private response: string | Error) {}
   async generate(
     _prompt: string,
     _options?: LlmGenerateOptions,
   ): Promise<string> {
+    if (this.response instanceof Error) {
+      throw this.response;
+    }
     return this.response;
   }
   async audit() {
@@ -155,10 +158,28 @@ describe("ExecutiveService", () => {
       llm,
     );
 
-    // Fallback: approve up to 3 candidates
-    expect(cycle.approvedActions).toHaveLength(2);
+    expect(cycle.approvedActions).toHaveLength(0);
+    expect(cycle.skippedActions).toHaveLength(2);
     expect(cycle.objective).toBe("funnel_expansion");
     expect(cycle.funnelStage).toBe("bootstrap");
+  });
+
+  it("safe-stops when the executive LLM throws runner errors", async () => {
+    const service = new ExecutiveServiceImpl();
+    const llm = new MockLlmClient(new Error("copilot runner budget exceeded"));
+
+    const cycle = await service.beginHeartbeatCycle(
+      makeReports(),
+      [
+        { type: "generate_note", priority: 1, reason: "note枠" },
+        { type: "reply_safe", priority: 2, reason: "replies" },
+      ],
+      llm,
+    );
+
+    expect(cycle.approvedActions).toHaveLength(0);
+    expect(cycle.skippedActions).toHaveLength(2);
+    expect(cycle.llmReasoning).toContain("safe-stop");
   });
 
   it("stores department runs and completes the cycle", async () => {
@@ -209,7 +230,8 @@ describe("ExecutiveService", () => {
     );
 
     expect(cycle.llmReasoning).toBeDefined();
-    expect(cycle.approvedActions).toHaveLength(1); // bounded fallback
+    expect(cycle.approvedActions).toHaveLength(0);
+    expect(cycle.skippedActions).toHaveLength(1);
 
     const strategies = db.select().from(schema.strategyStates).all();
     const cycles = db.select().from(schema.executiveCycles).all();

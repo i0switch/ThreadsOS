@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import {
-  getDashboardObservation,
-  getDashboardMission,
-  getDashboardRevenue,
-  getDashboardExecutive,
   getDashboardDepartments,
+  getDashboardExecutive,
   getDashboardExperiments,
+  getDashboardMission,
+  getDashboardObservation,
+  getDashboardRevenue,
   getDashboardSystem,
 } from "../services/dashboard-observation/index.js";
 

@@ -386,7 +386,20 @@ export class MetricsSyncServiceImpl implements MetricsSyncService {
       };
 
       const stats = await noteApi.getArticleStats(article.id);
-      const normalized = inferNoteMetrics({ article, stats, existing });
+      const statsWithArticleFallback =
+        stats.views === 0 && stats.likes === 0 && stats.comments === 0
+          ? {
+              ...stats,
+              views: article.views,
+              likes: article.likes,
+              comments: article.comments ?? 0,
+            }
+          : stats;
+      const normalized = inferNoteMetrics({
+        article,
+        stats: statsWithArticleFallback,
+        existing,
+      });
       const previousRevenue = existing?.revenueYen ?? 0;
       const previousPurchases = existing?.purchasesCount ?? 0;
 
@@ -491,8 +504,16 @@ export class MetricsSyncServiceImpl implements MetricsSyncService {
     metricsSnapshots: number;
   }> {
     // Pre-flight: verify Threads token health
-    if ("verifyTokenHealth" in threadsApi && typeof (threadsApi as Record<string, unknown>).verifyTokenHealth === "function") {
-      const health = await (threadsApi as { verifyTokenHealth: () => Promise<{ ok: boolean; detail: string }> }).verifyTokenHealth();
+    if (
+      "verifyTokenHealth" in threadsApi &&
+      typeof (threadsApi as Record<string, unknown>).verifyTokenHealth ===
+        "function"
+    ) {
+      const health = await (
+        threadsApi as {
+          verifyTokenHealth: () => Promise<{ ok: boolean; detail: string }>;
+        }
+      ).verifyTokenHealth();
       if (!health.ok) {
         const ledger = createRuntimeLedgerRepository();
         ledger.recordAnomaly({

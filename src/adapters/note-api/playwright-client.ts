@@ -117,8 +117,8 @@ class NoteInnerApiClient {
   }> {
     // Try stats endpoint first, fall back to note detail
     const candidates = [
-      `https://note.com/api/v2/notes/${encodeURIComponent(noteId)}/stats`,
       `https://note.com/api/v3/notes/${encodeURIComponent(noteId)}`,
+      `https://note.com/api/v2/notes/${encodeURIComponent(noteId)}/stats`,
       `https://note.com/api/v1/notes/${encodeURIComponent(noteId)}`,
     ];
 
@@ -134,40 +134,59 @@ class NoteInnerApiClient {
 
       return {
         views: Number(
-          source.readCount ?? source.views ?? source.viewCount ?? 0,
+          source.readCount ??
+            source.read_count ??
+            source.views ??
+            source.viewCount ??
+            0,
         ),
-        likes: Number(source.likeCount ?? source.likes ?? 0),
+        likes: Number(
+          source.likeCount ?? source.like_count ?? source.likes ?? 0,
+        ),
         comments: Number(
-          source.commentCount ?? source.comments ?? source.commentsCount ?? 0,
+          source.commentCount ??
+            source.comment_count ??
+            source.comments ??
+            source.commentsCount ??
+            0,
         ),
         priceYen: source.price !== undefined ? Number(source.price) : undefined,
         purchasesCount:
           source.purchaseCount !== undefined
             ? Number(source.purchaseCount)
-            : source.salesCount !== undefined
-              ? Number(source.salesCount)
-              : undefined,
+            : source.purchase_count !== undefined
+              ? Number(source.purchase_count)
+              : source.salesCount !== undefined
+                ? Number(source.salesCount)
+                : undefined,
         revenueYen:
           source.revenue !== undefined
             ? Number(source.revenue)
-            : source.salesAmount !== undefined
-              ? Number(source.salesAmount)
-              : undefined,
+            : source.revenue_yen !== undefined
+              ? Number(source.revenue_yen)
+              : source.salesAmount !== undefined
+                ? Number(source.salesAmount)
+                : undefined,
         conversionRate:
           source.conversionRate !== undefined
             ? Number(source.conversionRate)
-            : source.cvRate !== undefined
-              ? Number(source.cvRate)
-              : undefined,
+            : source.conversion_rate !== undefined
+              ? Number(source.conversion_rate)
+              : source.cvRate !== undefined
+                ? Number(source.cvRate)
+                : undefined,
         trafficSource:
           typeof source.trafficSource === "string"
             ? source.trafficSource
-            : undefined,
-        publishedAt: source.publishAt
-          ? String(source.publishAt)
-          : source.publishedAt
-            ? String(source.publishedAt)
-            : undefined,
+            : typeof source.traffic_source === "string"
+              ? source.traffic_source
+              : undefined,
+        publishedAt:
+          (source.publishAt ?? source.publish_at)
+            ? String(source.publishAt ?? source.publish_at)
+            : source.publishedAt
+              ? String(source.publishedAt)
+              : undefined,
       };
     }
 
@@ -181,6 +200,7 @@ class NoteInnerApiClient {
   async getMyArticles(): Promise<
     Array<{
       id: string;
+      key?: string;
       title: string;
       url: string;
       views: number;
@@ -224,6 +244,7 @@ class NoteInnerApiClient {
 
       const result: Array<{
         id: string;
+        key?: string;
         title: string;
         url: string;
         views: number;
@@ -240,7 +261,8 @@ class NoteInnerApiClient {
       for (const item of rawItems) {
         if (!item || typeof item !== "object") continue;
         const record = item as Record<string, unknown>;
-        const id = String(record.id ?? record.key ?? "");
+        const key = typeof record.key === "string" ? record.key : undefined;
+        const id = String(record.key ?? record.id ?? "");
         const title = String(record.name ?? record.title ?? "");
         const noteUrl = String(
           record.noteUrl ??
@@ -253,16 +275,23 @@ class NoteInnerApiClient {
 
         result.push({
           id,
+          key,
           title,
           url: noteUrl,
-          views: Number(record.readCount ?? record.views ?? 0),
-          likes: Number(record.likeCount ?? record.likes ?? 0),
+          views: Number(
+            record.readCount ?? record.read_count ?? record.views ?? 0,
+          ),
+          likes: Number(
+            record.likeCount ?? record.like_count ?? record.likes ?? 0,
+          ),
           comments:
             record.commentCount !== undefined
               ? Number(record.commentCount)
-              : record.comments !== undefined
-                ? Number(record.comments)
-                : undefined,
+              : record.comment_count !== undefined
+                ? Number(record.comment_count)
+                : record.comments !== undefined
+                  ? Number(record.comments)
+                  : undefined,
           priceYen:
             record.price !== undefined ? Number(record.price) : undefined,
           purchasesCount:
@@ -280,18 +309,23 @@ class NoteInnerApiClient {
           conversionRate:
             record.conversionRate !== undefined
               ? Number(record.conversionRate)
-              : record.cvRate !== undefined
-                ? Number(record.cvRate)
-                : undefined,
+              : record.conversion_rate !== undefined
+                ? Number(record.conversion_rate)
+                : record.cvRate !== undefined
+                  ? Number(record.cvRate)
+                  : undefined,
           trafficSource:
             typeof record.trafficSource === "string"
               ? record.trafficSource
-              : undefined,
-          publishedAt: record.publishAt
-            ? String(record.publishAt)
-            : record.publishedAt
-              ? String(record.publishedAt)
-              : undefined,
+              : typeof record.traffic_source === "string"
+                ? record.traffic_source
+                : undefined,
+          publishedAt:
+            (record.publishAt ?? record.publish_at)
+              ? String(record.publishAt ?? record.publish_at)
+              : record.publishedAt
+                ? String(record.publishedAt)
+                : undefined,
         });
       }
 
@@ -539,6 +573,7 @@ export class PlaywrightNoteClient {
   async getMyArticles(): Promise<
     Array<{
       id: string;
+      key?: string;
       title: string;
       url: string;
       views: number;

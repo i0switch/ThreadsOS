@@ -30,6 +30,8 @@ const AUTO_APPROVABLE_ACTIONS: Set<string> = new Set([
   "notify",
   "research_threads",
   "research_note",
+  "analyze_competitors",
+  "fetch_competitor_updates",
 ]);
 
 /**

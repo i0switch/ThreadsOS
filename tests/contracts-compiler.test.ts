@@ -28,7 +28,7 @@ describe("contract compiler", () => {
     const compiled = compileContractStore();
     expect(compiled.agents).toHaveLength(5);
     expect(compiled.playbooks).toHaveLength(8);
-    expect(compiled.policies).toHaveLength(6);
+    expect(compiled.policies).toHaveLength(7);
   });
 
   it("fails when required contracts are missing", () => {

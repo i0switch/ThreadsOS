@@ -9,9 +9,9 @@ vi.mock("../src/db/index.js", () => {
   return { db: mockDb };
 });
 
-import { ensureAutonomyTables } from "../src/db/bootstrap.js";
 import type { NoteApiClient } from "../src/adapters/note-api/index.js";
 import type { ThreadsApiClient } from "../src/adapters/threads-api/index.js";
+import { ensureAutonomyTables } from "../src/db/bootstrap.js";
 import { AutoPublisherServiceImpl } from "../src/services/auto-publisher/index.js";
 
 describe("auto-publisher operations-mode guard", () => {
@@ -21,8 +21,8 @@ describe("auto-publisher operations-mode guard", () => {
 
   it("blocks Threads publication when channel is not writable", async () => {
     const operationsMode = {
-      isChannelWritable: vi.fn((channel: "threads" | "note") =>
-        channel === "note",
+      isChannelWritable: vi.fn(
+        (channel: "threads" | "note") => channel === "note",
       ),
     };
     const publisher = new AutoPublisherServiceImpl({
@@ -39,8 +39,8 @@ describe("auto-publisher operations-mode guard", () => {
 
   it("blocks note publication when channel is not writable", async () => {
     const operationsMode = {
-      isChannelWritable: vi.fn((channel: "threads" | "note") =>
-        channel === "threads",
+      isChannelWritable: vi.fn(
+        (channel: "threads" | "note") => channel === "threads",
       ),
     };
     const publisher = new AutoPublisherServiceImpl({

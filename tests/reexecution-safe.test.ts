@@ -400,6 +400,43 @@ describe("re-execution safety", () => {
     expect(drafts[0].body).toContain('ある"共通点"がある');
   });
 
+  it("rejects regenerateDraft responses that omit body", async () => {
+    const service = new PostGenerationServiceImpl();
+    const now = new Date().toISOString();
+    const llm: LlmClient = {
+      generate: vi.fn().mockResolvedValue(
+        JSON.stringify({
+          hookType: "story",
+          ctaType: "comment",
+          noteTransition: "続きはnoteへ",
+        }),
+      ),
+      audit: vi.fn(),
+    };
+
+    db.insert(schema.threadPostDrafts)
+      .values({
+        id: "draft-regenerate-source",
+        topicId: "topic-1",
+        body: "元の本文",
+        hookType: "curiosity",
+        ctaType: "comment",
+        noteTransition: null,
+        status: "draft",
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    await expect(
+      service.regenerateDraft("draft-regenerate-source", "改善して", llm),
+    ).rejects.toThrow(/missing body/i);
+
+    const drafts = db.select().from(schema.threadPostDrafts).all();
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].body).toBe("元の本文");
+  });
+
   it("does not duplicate replies or insights when followup runs twice", async () => {
     const service = new OrchestrationServiceImpl();
     const api: ThreadsApiClient = {
@@ -1160,6 +1197,80 @@ describe("re-execution safety", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe("note-dry-ok");
+  });
+
+  it("keeps note schedule generation collision-free when fewer candidate times exist than draft-bound slots", async () => {
+    const service = new CadenceOptimizerServiceImpl();
+    const now = new Date("2026-04-18T20:00:00.000Z");
+    const nowIso = now.toISOString();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    try {
+      db.insert(schema.notePostResults)
+        .values({
+          id: "note-result-1",
+          draftId: "note-draft-history-1",
+          title: "history",
+          noteUrl: "https://note.com/example/n/history-1",
+          priceYen: 500,
+          views: 100,
+          likes: 10,
+          commentsCount: 2,
+          purchasesCount: 1,
+          revenueYen: 500,
+          conversionRate: 0.02,
+          publishedAt: "2026-04-20T01:00:00.000Z",
+          createdAt: nowIso,
+        })
+        .run();
+
+      db.insert(schema.contentSlots)
+        .values([
+          {
+            id: "note-slot-a",
+            channel: "note",
+            scheduledAt: "2026-04-19T00:00:00.000Z",
+            topicId: "topic-1",
+            draftId: "note-draft-a",
+            status: "pending",
+            priority: 10,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          },
+          {
+            id: "note-slot-b",
+            channel: "note",
+            scheduledAt: "2026-04-20T01:00:00.000Z",
+            topicId: "topic-1",
+            draftId: "note-draft-b",
+            status: "pending",
+            priority: 9,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          },
+        ])
+        .run();
+
+      await expect(
+        service.generateSchedule("note", 7),
+      ).resolves.toBeUndefined();
+
+      const pendingSlots = db
+        .select()
+        .from(schema.contentSlots)
+        .where(
+          sql`${schema.contentSlots.channel} = 'note' AND ${schema.contentSlots.status} = 'pending'`,
+        )
+        .all();
+
+      expect(new Set(pendingSlots.map((slot) => slot.scheduledAt)).size).toBe(
+        pendingSlots.length,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("parses cadence optimizer responses with fenced multiline JSON", async () => {

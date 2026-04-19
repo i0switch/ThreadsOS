@@ -6,7 +6,7 @@
     "dev": "tsx watch src/server/index.ts",
     "build": "tsc",
     "test": "vitest run",
-    "lint": "biome check .",
+    "lint": "biome check src tests scripts package.json tsconfig.json vitest.config.ts drizzle.config.ts biome.json",
     "contracts:compile": "tsx src/cli/contracts-compile.ts",
     "db:migrate": "tsx src/db/migrate.ts",
     "job:tier:15m": "tsx src/jobs/tier-15m.ts",

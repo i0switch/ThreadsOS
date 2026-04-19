@@ -214,7 +214,6 @@ function safeDivide(value: number, total: number): number {
   return value / total;
 }
 
-
 function toAggregateMetrics(params: {
   threadRows: Array<typeof threadPostResults.$inferSelect>;
   noteRows: Array<typeof notePostResults.$inferSelect>;
@@ -651,7 +650,9 @@ export class ExecutiveExperimentServiceImpl
       if (right.banditSample !== left.banditSample) {
         return right.banditSample - left.banditSample;
       }
-      return left.candidate.patternKey.localeCompare(right.candidate.patternKey);
+      return left.candidate.patternKey.localeCompare(
+        right.candidate.patternKey,
+      );
     });
     return scoredCandidates.map((entry) => entry.candidate);
   }
@@ -1078,11 +1079,17 @@ export class ExecutiveExperimentServiceImpl
           .where(eq(experimentResults.id, resultRow.id))
           .run();
         db.update(experiments)
-          .set({ status: "rejected", rejectedAt: measuredAt, updatedAt: measuredAt })
+          .set({
+            status: "rejected",
+            rejectedAt: measuredAt,
+            updatedAt: measuredAt,
+          })
           .where(eq(experiments.id, experiment.id))
           .run();
         rejectedCount += 1;
-        summaries.push(`${experiment.id}:${resultRow.windowHours}h:reject:launchedAt未設定`);
+        summaries.push(
+          `${experiment.id}:${resultRow.windowHours}h:reject:launchedAt未設定`,
+        );
         continue;
       }
 

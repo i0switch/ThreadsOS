@@ -45,6 +45,7 @@ export interface ContentSchedulerService {
   decideActions(): Promise<ScheduledAction[]>;
   syncThreadSlotsFromAuditedDrafts(maxSlots?: number): Promise<number>;
   syncNoteSlotsFromAuditedDrafts(maxSlots?: number): Promise<number>;
+  releaseNextPendingNoteSlotForImmediatePublish(): Promise<boolean>;
   getNextThreadSlot(): Promise<ContentSlot | null>;
   getNextNoteSlot(): Promise<ContentSlot | null>;
   reserveSlot(slotId: string, draftId: string): Promise<boolean>;
@@ -817,6 +818,48 @@ export class ContentSchedulerServiceImpl implements ContentSchedulerService {
       .limit(1)
       .get();
     return row ?? null;
+  }
+
+  async releaseNextPendingNoteSlotForImmediatePublish(): Promise<boolean> {
+    const nextSlot = await this.getNextNoteSlot();
+    if (!nextSlot) {
+      return false;
+    }
+
+    if (new Date(nextSlot.scheduledAt).getTime() <= Date.now()) {
+      return true;
+    }
+
+    const occupiedTimes = new Set(
+      db
+        .select()
+        .from(contentSlots)
+        .where(
+          and(
+            eq(contentSlots.channel, "note"),
+            eq(contentSlots.status, "pending"),
+          ),
+        )
+        .all()
+        .filter((slot) => slot.id !== nextSlot.id)
+        .map((slot) => slot.scheduledAt),
+    );
+
+    let releaseAtMs = Date.now();
+    let releaseAt = new Date(releaseAtMs).toISOString();
+    while (occupiedTimes.has(releaseAt)) {
+      releaseAtMs += 1;
+      releaseAt = new Date(releaseAtMs).toISOString();
+    }
+
+    db.update(contentSlots)
+      .set({
+        scheduledAt: releaseAt,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(contentSlots.id, nextSlot.id))
+      .run();
+    return true;
   }
 
   async getNextNoteSlot(): Promise<ContentSlot | null> {

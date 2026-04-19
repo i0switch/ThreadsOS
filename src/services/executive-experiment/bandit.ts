@@ -28,7 +28,7 @@ function sampleGamma(shape: number, rng: Rng): number {
   if (shape < 1) {
     const boosted = sampleGamma(shape + 1, rng);
     const u = Math.max(rng(), Number.EPSILON);
-    return boosted * Math.pow(u, 1 / shape);
+    return boosted * u ** (1 / shape);
   }
   const d = shape - 1 / 3;
   const c = 1 / Math.sqrt(9 * d);

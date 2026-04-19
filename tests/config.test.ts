@@ -25,6 +25,9 @@ describe("loadEnv", () => {
     delete process.env.LLM_RUNNER_DAILY_TOKENS_LIMIT;
     delete process.env.LLM_RUNNER_DAILY_CALLS_LIMIT;
     delete process.env.LLM_RUNNER_CIRCUIT_FAILURE_THRESHOLD;
+    delete process.env.THREADS_ACCESS_TOKEN;
+    delete process.env.THREADS_USER_ID;
+    delete process.env.DASHBOARD_AUTH_TOKEN;
   });
 
   it("should return default values when no env vars set", () => {
@@ -93,6 +96,8 @@ describe("loadEnv", () => {
 
   it("should accept valid NODE_ENV values", () => {
     process.env.NODE_ENV = "production";
+    process.env.THREADS_ACCESS_TOKEN = "test-token";
+    process.env.THREADS_USER_ID = "test-user";
     const env = loadEnv();
     expect(env.NODE_ENV).toBe("production");
   });

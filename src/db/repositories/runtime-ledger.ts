@@ -254,7 +254,9 @@ export function createRuntimeLedgerRepository() {
         row.attempts >= threshold ? "quarantined" : "pending";
       const nextAvailableAt =
         nextStatus === "pending"
-          ? new Date(Date.now() + backoffMs * Math.max(1, row.attempts)).toISOString()
+          ? new Date(
+              Date.now() + backoffMs * Math.max(1, row.attempts),
+            ).toISOString()
           : row.availableAt;
       db.update(executionOutbox)
         .set({

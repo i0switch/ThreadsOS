@@ -236,7 +236,7 @@ async function runTrackedSubJob(
 }
 
 await runJob(
-  { name: "hourly-heartbeat", dryRun },
+  { name: "hourly-heartbeat", dryRun, stuckThresholdMinutes: 31 },
   async ({ dryRun, logger }) => {
     startHeartbeatSession();
     db.insert(heartbeatStates)
@@ -460,22 +460,32 @@ await runJob(
       // ── Budget initialization (Step 13 prep) ─────────────────
       // Policy-governed: global limits from policies/rate-budget.md,
       // per-department limits from agents/<dept>.md llmBudget field.
-      const { getCompiledContractStore } = await import("../services/contracts/index.js");
+      const { getCompiledContractStore } = await import(
+        "../services/contracts/index.js"
+      );
       let globalTokenLimit = 50000;
       let globalCallLimit = 30;
       let deptTokenLimit = 10000;
       let deptCallLimit = 10;
       try {
         const contracts = getCompiledContractStore();
-        const rateBudgetPolicy = contracts.policies.find((p) => p.id === "rate-budget");
+        const rateBudgetPolicy = contracts.policies.find(
+          (p) => p.id === "rate-budget",
+        );
         if (rateBudgetPolicy?.thresholds) {
           const rb = rateBudgetPolicy.thresholds as Record<string, unknown>;
-          if (typeof rb.tokensPerHeartbeat === "number") globalTokenLimit = rb.tokensPerHeartbeat;
-          if (typeof rb.callsPerHeartbeat === "number") globalCallLimit = rb.callsPerHeartbeat;
-          if (typeof rb.deptTokensPerHeartbeat === "number") deptTokenLimit = rb.deptTokensPerHeartbeat;
-          if (typeof rb.deptCallsPerHeartbeat === "number") deptCallLimit = rb.deptCallsPerHeartbeat;
+          if (typeof rb.tokensPerHeartbeat === "number")
+            globalTokenLimit = rb.tokensPerHeartbeat;
+          if (typeof rb.callsPerHeartbeat === "number")
+            globalCallLimit = rb.callsPerHeartbeat;
+          if (typeof rb.deptTokensPerHeartbeat === "number")
+            deptTokenLimit = rb.deptTokensPerHeartbeat;
+          if (typeof rb.deptCallsPerHeartbeat === "number")
+            deptCallLimit = rb.deptCallsPerHeartbeat;
         }
-      } catch { /* fallback to defaults */ }
+      } catch {
+        /* fallback to defaults */
+      }
       budgetService.initBudget(
         "global",
         "heartbeat",
@@ -658,27 +668,19 @@ await runJob(
           pendingNoteSlotCount > 0 &&
           !cycle.approvedActions.some((a) => a.type === "generate_note")
         ) {
-          // 未来時刻のpending slot を即時実行可能にする
-          const nowIso = new Date().toISOString();
-          db.update(contentSlots)
-            .set({ scheduledAt: nowIso, updatedAt: nowIso })
-            .where(
-              and(
-                eq(contentSlots.channel, "note"),
-                eq(contentSlots.status, "pending"),
-              ),
-            )
-            .run();
-
-          cycle.approvedActions.push({
-            type: "generate_note" as ActionType,
-            priority: 5,
-            reason: "audited下書きとpendingスロットがあるため強制公開実行",
-          });
-          logger.info(
-            { auditedNoteCount, pendingNoteSlotCount },
-            "Forced generate_note action to publish audited drafts",
-          );
+          const released =
+            await scheduler.releaseNextPendingNoteSlotForImmediatePublish();
+          if (released) {
+            cycle.approvedActions.push({
+              type: "generate_note" as ActionType,
+              priority: 5,
+              reason: "audited下書きとpendingスロットがあるため強制公開実行",
+            });
+            logger.info(
+              { auditedNoteCount, pendingNoteSlotCount },
+              "Forced generate_note action to publish audited drafts",
+            );
+          }
         }
       } catch (forceErr) {
         logger.warn(

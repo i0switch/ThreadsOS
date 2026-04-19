@@ -65,6 +65,11 @@ const PUBLISH_FAILURE_JOB_NAMES = new Set([
   "nightly-note-pipeline",
   "post-publish-followup",
 ]);
+const BLOCKING_RUNNERS = new Set([
+  "claude",
+  "threads-metrics-sync",
+  "note-metrics-sync",
+]);
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -82,6 +87,10 @@ function looksLikePublishFailure(text: string): boolean {
   return /(publish|outbox|adapter|session|threads|note|token|api|quota)/i.test(
     text,
   );
+}
+
+function buildDistinctAnomalyKey(category: string, message: string): string {
+  return `${category}::${message}`;
 }
 
 function deriveNoteSessionState(): OperationsModeEvidence["noteSessionState"] {
@@ -137,29 +146,56 @@ export function createOperationsModeService(): OperationsModeService {
     const recentHighSeverityAnomalies = recentAnomalies.filter((row) =>
       isHighSeverity(row.severity),
     );
-    const recentFailedJobs = db
+    const distinctHighSeverityAnomalies = new Set(
+      recentHighSeverityAnomalies.map((row) =>
+        buildDistinctAnomalyKey(row.category, row.message),
+      ),
+    );
+    const publishRelatedHighSeverityAnomalies =
+      recentHighSeverityAnomalies.filter((row) =>
+        looksLikePublishFailure(
+          toLowerHaystack(row.category, row.message, row.metadataJson),
+        ),
+      );
+    const recentJobRuns = db
       .select()
       .from(scheduledJobRuns)
       .where(gte(scheduledJobRuns.startedAt, since))
       .orderBy(desc(scheduledJobRuns.startedAt))
       .all()
-      .filter((row) => row.status === "failed");
+      .filter(
+        (row) =>
+          !/^Stuck running for over|^Stale running cleaned up/i.test(
+            row.resultSummary ?? "",
+          ),
+      );
+    const latestPublishRuns = new Map<string, (typeof recentJobRuns)[number]>();
+    for (const row of recentJobRuns) {
+      if (
+        PUBLISH_FAILURE_JOB_NAMES.has(row.jobName) &&
+        !latestPublishRuns.has(row.jobName)
+      ) {
+        latestPublishRuns.set(row.jobName, row);
+      }
+    }
+    const latestPublishFailures = Array.from(latestPublishRuns.values()).filter(
+      (row) => row.status === "failed",
+    );
+    const recentFailedJobs = recentJobRuns.filter(
+      (row) => row.status === "failed",
+    );
 
     const publishFailureSignals =
-      recentHighSeverityAnomalies.filter((row) =>
-        looksLikePublishFailure(
-          toLowerHaystack(row.category, row.message, row.metadataJson),
-        ),
-      ).length +
-      recentFailedJobs.filter((row) =>
-        PUBLISH_FAILURE_JOB_NAMES.has(row.jobName),
-      ).length;
+      publishRelatedHighSeverityAnomalies.length + latestPublishFailures.length;
 
     const runners = db.select().from(runnerHealth).all();
-    const trippedRunners = runners.filter(
+    const blockingRunners = runners.filter((row) =>
+      BLOCKING_RUNNERS.has(row.runner),
+    );
+    const trippedRunners = blockingRunners.filter(
       (row) => row.status === "tripped",
     ).length;
-    const degradedRunners = runners.filter(
+    const degradedRunners = blockingRunners.filter(
       (row) => row.status === "degraded",
     ).length;
 
@@ -167,7 +203,7 @@ export function createOperationsModeService(): OperationsModeService {
       activeGlobalPause,
       noteSessionState,
       publishFailureSignals,
-      recentHighSeverityAnomalies: recentHighSeverityAnomalies.length,
+      recentHighSeverityAnomalies: distinctHighSeverityAnomalies.size,
       recentFailedJobs: recentFailedJobs.map((row) => row.jobName),
       trippedRunners,
       degradedRunners,
@@ -176,7 +212,7 @@ export function createOperationsModeService(): OperationsModeService {
     if (
       activeGlobalPause ||
       trippedRunners >= 2 ||
-      recentHighSeverityAnomalies.length >= 3 ||
+      distinctHighSeverityAnomalies.size >= 3 ||
       (noteSessionState === "quarantined" && publishFailureSignals > 0)
     ) {
       return {

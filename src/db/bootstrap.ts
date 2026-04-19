@@ -181,6 +181,44 @@ export function ensureAutonomyTables(): void {
     ON content_slots (channel, scheduled_at, status)`),
   );
 
+  db.run(sql`CREATE TABLE IF NOT EXISTS proposals (
+    id TEXT PRIMARY KEY NOT NULL,
+    agent_id TEXT NOT NULL,
+    leader_agent_id TEXT,
+    executive_agent_id TEXT,
+    department TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence TEXT NOT NULL,
+    expected_effect TEXT NOT NULL,
+    risk TEXT,
+    priority TEXT NOT NULL DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'pending',
+    current_stage TEXT NOT NULL DEFAULT 'executive_review',
+    current_approver_id TEXT,
+    reviewer_note TEXT,
+    reviewed_at TEXT,
+    executed_at TEXT,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(sql`CREATE TABLE IF NOT EXISTS proposal_events (
+    id TEXT PRIMARY KEY NOT NULL,
+    proposal_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    action TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    note TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL
+  )`);
+
+  db.run(
+    sql.raw(`CREATE INDEX IF NOT EXISTS proposal_events_proposal_created_idx
+    ON proposal_events (proposal_id, created_at)`),
+  );
+
   db.run(sql`CREATE TABLE IF NOT EXISTS heartbeat_states (
     job_name TEXT PRIMARY KEY NOT NULL,
     last_run_at TEXT,

@@ -214,16 +214,30 @@ ${feedback}
       tier: "standard",
     });
     const parsed = parseJsonObject<{
-      body: string;
-      hookType: string;
-      ctaType: string;
+      body?: string;
+      hookType?: string;
+      ctaType?: string;
       noteTransition?: string;
-    }>(raw) ?? {
-      body: existing.body,
-      hookType: existing.hookType,
-      ctaType: existing.ctaType,
-      noteTransition: existing.noteTransition,
-    };
+    }>(raw);
+
+    if (!parsed) {
+      throw new Error("Failed to parse regenerated draft JSON");
+    }
+    if (typeof parsed.body !== "string" || parsed.body.trim().length === 0) {
+      throw new Error("LLM response missing body");
+    }
+    if (
+      typeof parsed.hookType !== "string" ||
+      parsed.hookType.trim().length === 0
+    ) {
+      throw new Error("LLM response missing hookType");
+    }
+    if (
+      typeof parsed.ctaType !== "string" ||
+      parsed.ctaType.trim().length === 0
+    ) {
+      throw new Error("LLM response missing ctaType");
+    }
 
     const now = new Date().toISOString();
     const newId = randomUUID();

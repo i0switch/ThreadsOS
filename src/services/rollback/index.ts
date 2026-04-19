@@ -103,7 +103,6 @@ export interface RollbackService {
   recordWinningPattern(input: WinningPatternInput): string;
 }
 
-
 function nowIso(): string {
   return new Date().toISOString();
 }

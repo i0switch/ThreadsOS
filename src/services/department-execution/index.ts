@@ -747,14 +747,7 @@ export class DepartmentExecutionServiceImpl {
 
   private async runNoteOptimizationTasks(): Promise<string[]> {
     await this.deps.optimizer.analyzeAndUpdate(this.deps.llm, "note");
-
-    const report = await this.deps.notification.generateProgressReport();
-    await this.deps.notification.sendNotification({
-      type: "progress",
-      report,
-    });
-
-    return ["Note schedule optimized", "Progress notification sent"];
+    return ["Note schedule optimized"];
   }
 
   private createNoteExecutor(): DepartmentExecutor {

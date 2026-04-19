@@ -116,6 +116,22 @@ function buildCandidateScheduleTimes(
   return candidates;
 }
 
+function assignUniqueScheduledAt(
+  scheduledAt: string,
+  usedScheduledAt: Set<string>,
+): string {
+  let candidate = new Date(scheduledAt);
+  let candidateIso = candidate.toISOString();
+
+  while (usedScheduledAt.has(candidateIso)) {
+    candidate = new Date(candidate.getTime() + 1000);
+    candidateIso = candidate.toISOString();
+  }
+
+  usedScheduledAt.add(candidateIso);
+  return candidateIso;
+}
+
 export class CadenceOptimizerServiceImpl implements CadenceOptimizerService {
   async analyzeOptimalTimes(channel = "threads"): Promise<TimeSlot[]> {
     const results =
@@ -302,13 +318,6 @@ ${resultLines}
       )
       .all();
 
-    for (const slot of futurePendingSlots) {
-      if (slot.draftId) {
-        continue;
-      }
-      db.delete(contentSlots).where(eq(contentSlots.id, slot.id)).run();
-    }
-
     const draftBoundSlots = futurePendingSlots
       .filter((slot) => Boolean(slot.draftId))
       .sort((left, right) => {
@@ -319,6 +328,13 @@ ${resultLines}
       });
 
     if (draftBoundSlots.length === 0) {
+      for (const slot of futurePendingSlots) {
+        if (slot.draftId) {
+          continue;
+        }
+        db.delete(contentSlots).where(eq(contentSlots.id, slot.id)).run();
+      }
+
       db.insert(optimizationDecisions)
         .values({
           id: randomUUID(),
@@ -351,39 +367,67 @@ ${resultLines}
       return;
     }
 
-    let updated = 0;
-    for (const [index, slot] of draftBoundSlots.entries()) {
-      const candidate = candidateTimes[index];
-      if (!candidate) {
-        break;
+    const temporaryBase = Date.UTC(9999, 11, 31, 23, 59, 59, 0);
+    const usedScheduledAt = new Set<string>();
+    const stagedSlots = draftBoundSlots.map((slot, index) => ({
+      ...slot,
+      temporaryScheduledAt: new Date(
+        temporaryBase - index * 1000,
+      ).toISOString(),
+      finalScheduledAt: assignUniqueScheduledAt(
+        candidateTimes[index]?.toISOString() ?? slot.scheduledAt,
+        usedScheduledAt,
+      ),
+    }));
+
+    const updated = Math.min(draftBoundSlots.length, candidateTimes.length);
+
+    db.transaction((tx) => {
+      for (const slot of futurePendingSlots) {
+        if (slot.draftId) {
+          continue;
+        }
+        tx.delete(contentSlots).where(eq(contentSlots.id, slot.id)).run();
       }
 
-      db.update(contentSlots)
-        .set({
-          scheduledAt: candidate.toISOString(),
-          updatedAt: nowIso,
-        })
-        .where(eq(contentSlots.id, slot.id))
-        .run();
-      updated++;
-    }
+      for (const slot of stagedSlots) {
+        tx.update(contentSlots)
+          .set({
+            scheduledAt: slot.temporaryScheduledAt,
+            updatedAt: nowIso,
+          })
+          .where(eq(contentSlots.id, slot.id))
+          .run();
+      }
 
-    db.insert(optimizationDecisions)
-      .values({
-        id: randomUUID(),
-        channel,
-        decisionType: "timing",
-        beforeValue: JSON.stringify({
-          draftBoundSlots: draftBoundSlots.length,
-          generatedDays: days,
-        }),
-        afterValue: JSON.stringify({ slotsUpdated: updated }),
-        reason: "Rescheduled draft-bound slots from recent JST engagement data",
-        changePercent: null,
-        approvedBy: "auto",
-        createdAt: nowIso,
-      })
-      .run();
+      for (const slot of stagedSlots) {
+        tx.update(contentSlots)
+          .set({
+            scheduledAt: slot.finalScheduledAt,
+            updatedAt: nowIso,
+          })
+          .where(eq(contentSlots.id, slot.id))
+          .run();
+      }
+
+      tx.insert(optimizationDecisions)
+        .values({
+          id: randomUUID(),
+          channel,
+          decisionType: "timing",
+          beforeValue: JSON.stringify({
+            draftBoundSlots: draftBoundSlots.length,
+            generatedDays: days,
+          }),
+          afterValue: JSON.stringify({ slotsUpdated: updated }),
+          reason:
+            "Rescheduled draft-bound slots from recent JST engagement data",
+          changePercent: null,
+          approvedBy: "auto",
+          createdAt: nowIso,
+        })
+        .run();
+    });
 
     logger.info(
       { channel, days, slotsUpdated: updated },

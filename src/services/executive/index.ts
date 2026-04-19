@@ -473,14 +473,21 @@ ${proposalDetails}
 
   private buildFallbackPlan(
     candidateActions: ScheduledAction[],
-    options?: { isDryRun?: boolean },
+    options?: {
+      isDryRun?: boolean;
+      fallbackReason?: string;
+      anomalyCategory?: string;
+      anomalyMessage?: string;
+      anomalyMetadata?: Record<string, unknown>;
+    },
   ): HeartbeatCyclePlan {
     // Spec §2 (絶対条件「迷ったら止める」) §20 (confidence 低 → 実行しない) に従い、
-    // LLM parse failure 時は何も実行しない。連続失敗時は anomalyEvents 経由で
+    // Executive LLM failure 時は何も実行しない。連続失敗時は anomalyEvents 経由で
     // operations-mode が safe_freeze に昇格させる。
     // dry-run 時は anomaly を記録しない（本番の安全判定を汚染しないため）。
     const cycleId = randomUUID();
     const fallbackReason =
+      options?.fallbackReason ??
       "LLM response parse failed; safe-stop until next heartbeat (no actions executed)";
     const skipped = candidateActions.map((a) => ({
       action: a,
@@ -491,16 +498,26 @@ ${proposalDetails}
       try {
         const ledger = createRuntimeLedgerRepository();
         ledger.recordAnomaly({
-          category: "executive_parse_failure",
+          category: options?.anomalyCategory ?? "executive_parse_failure",
           severity: "high",
           message:
+            options?.anomalyMessage ??
             "Executive LLM parse failed; safe-stop applied. Connected anomalies feed operations-mode safe_freeze trigger.",
-          metadata: { candidateCount: candidateActions.length, cycleId },
+          metadata: {
+            candidateCount: candidateActions.length,
+            cycleId,
+            ...(options?.anomalyMetadata ?? {}),
+          },
         });
       } catch (anomalyErr) {
         logger.warn(
-          { error: anomalyErr instanceof Error ? anomalyErr.message : String(anomalyErr) },
-          "Failed to record executive_parse_failure anomaly",
+          {
+            error:
+              anomalyErr instanceof Error
+                ? anomalyErr.message
+                : String(anomalyErr),
+          },
+          "Failed to record executive fallback anomaly",
         );
       }
     }
@@ -531,6 +548,55 @@ ${proposalDetails}
     };
   }
 
+  private persistFallbackPlan(fallback: HeartbeatCyclePlan): void {
+    const now = new Date().toISOString();
+    db.insert(strategyStates)
+      .values({
+        key: STRATEGY_STATE_KEY,
+        scope: "heartbeat",
+        stateJson: JSON.stringify(fallback.strategy),
+        summary: `${fallback.strategy.objective}:${fallback.strategy.funnelStage} — ${fallback.llmReasoning ?? ""}`,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: strategyStates.key,
+        set: {
+          scope: "heartbeat",
+          stateJson: JSON.stringify(fallback.strategy),
+          summary: `${fallback.strategy.objective}:${fallback.strategy.funnelStage} — ${fallback.llmReasoning ?? ""}`,
+          updatedAt: now,
+        },
+      })
+      .run();
+    db.insert(executiveCycles)
+      .values({
+        id: fallback.cycleId,
+        objective: fallback.objective,
+        funnelStage: fallback.funnelStage,
+        strategyKey: STRATEGY_STATE_KEY,
+        status: "running",
+        decisionJson: JSON.stringify({
+          fallbackReason: fallback.llmReasoning,
+          approvedActions: fallback.approvedActions,
+          skippedActions: fallback.skippedActions,
+        }),
+        summary: null,
+        startedAt: now,
+        completedAt: null,
+        createdAt: now,
+      })
+      .run();
+    this.saveStrategyHistory(
+      fallback.cycleId,
+      fallback.objective,
+      fallback.funnelStage,
+      fallback.llmReasoning ?? "",
+      {},
+      fallback.strategy,
+    );
+  }
+
   async beginHeartbeatCycle(
     reports: DepartmentReport[],
     candidateActions: ScheduledAction[],
@@ -544,13 +610,32 @@ ${proposalDetails}
       errorContext,
     );
 
-    const raw = await llm.generate(prompt, {
-      label: "executive-heartbeat-cycle",
-      temperature: 0.3,
-      systemPrompt:
-        "You are an executive decision maker for an autonomous social media system. Return ONLY valid JSON.",
-      tier: "standard",
-    });
+    let raw: string;
+    try {
+      raw = await llm.generate(prompt, {
+        label: "executive-heartbeat-cycle",
+        temperature: 0.3,
+        systemPrompt:
+          "You are an executive decision maker for an autonomous social media system. Return ONLY valid JSON.",
+        tier: "standard",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        { error: message },
+        "Executive LLM request failed; safe-stop applied (no actions approved)",
+      );
+      const fallback = this.buildFallbackPlan(candidateActions, {
+        isDryRun: options?.isDryRun,
+        fallbackReason: `Executive LLM request failed (${message}); safe-stop until next heartbeat (no actions executed)`,
+        anomalyCategory: "executive_runner_failure",
+        anomalyMessage:
+          "Executive LLM request failed; safe-stop applied. Connected anomalies feed operations-mode safe_freeze trigger.",
+        anomalyMetadata: { error: message },
+      });
+      this.persistFallbackPlan(fallback);
+      return fallback;
+    }
 
     const decision = parseJsonObject<LlmExecutiveDecision>(raw);
 
@@ -559,53 +644,10 @@ ${proposalDetails}
         { raw },
         "Executive LLM response parse failed; safe-stop applied (no actions approved)",
       );
-      const fallback = this.buildFallbackPlan(candidateActions, { isDryRun: options?.isDryRun });
-      const fbNow = new Date().toISOString();
-      db.insert(strategyStates)
-        .values({
-          key: STRATEGY_STATE_KEY,
-          scope: "heartbeat",
-          stateJson: JSON.stringify(fallback.strategy),
-          summary: `${fallback.strategy.objective}:${fallback.strategy.funnelStage} — ${fallback.llmReasoning ?? ""}`,
-          createdAt: fbNow,
-          updatedAt: fbNow,
-        })
-        .onConflictDoUpdate({
-          target: strategyStates.key,
-          set: {
-            scope: "heartbeat",
-            stateJson: JSON.stringify(fallback.strategy),
-            summary: `${fallback.strategy.objective}:${fallback.strategy.funnelStage} — ${fallback.llmReasoning ?? ""}`,
-            updatedAt: fbNow,
-          },
-        })
-        .run();
-      db.insert(executiveCycles)
-        .values({
-          id: fallback.cycleId,
-          objective: fallback.objective,
-          funnelStage: fallback.funnelStage,
-          strategyKey: STRATEGY_STATE_KEY,
-          status: "running",
-          decisionJson: JSON.stringify({
-            fallbackReason: fallback.llmReasoning,
-            approvedActions: fallback.approvedActions,
-            skippedActions: fallback.skippedActions,
-          }),
-          summary: null,
-          startedAt: fbNow,
-          completedAt: null,
-          createdAt: fbNow,
-        })
-        .run();
-      this.saveStrategyHistory(
-        fallback.cycleId,
-        fallback.objective,
-        fallback.funnelStage,
-        fallback.llmReasoning ?? "",
-        {},
-        fallback.strategy,
-      );
+      const fallback = this.buildFallbackPlan(candidateActions, {
+        isDryRun: options?.isDryRun,
+      });
+      this.persistFallbackPlan(fallback);
       return fallback;
     }
 

@@ -84,7 +84,7 @@ describe("dashboard production wiring", () => {
       headers: { authorization: "Bearer secret-token" },
     });
     expect(root.statusCode).toBe(200);
-    expect(root.body).toContain("<title>ThreadsOS Observation</title>");
+    expect(root.body).toContain("<title>ThreadsOS 司令室</title>");
     await app.close();
   });
 

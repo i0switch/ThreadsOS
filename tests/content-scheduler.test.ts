@@ -36,6 +36,63 @@ beforeEach(() => {
 });
 
 describe("ContentSchedulerService", () => {
+  it("releases only one pending note slot immediately without colliding unique timestamps", async () => {
+    const now = new Date();
+    const firstSlotTime = new Date(
+      now.getTime() + 60 * 60 * 1000,
+    ).toISOString();
+    const secondSlotTime = new Date(
+      now.getTime() + 2 * 60 * 60 * 1000,
+    ).toISOString();
+    const scheduler = new ContentSchedulerServiceImpl();
+
+    db.insert(schema.contentSlots)
+      .values([
+        {
+          id: "note-slot-force-1",
+          channel: "note",
+          scheduledAt: firstSlotTime,
+          topicId: null,
+          draftId: "note-draft-1",
+          status: "pending",
+          priority: 5,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+        {
+          id: "note-slot-force-2",
+          channel: "note",
+          scheduledAt: secondSlotTime,
+          topicId: null,
+          draftId: "note-draft-2",
+          status: "pending",
+          priority: 4,
+          createdAt: now.toISOString(),
+          updatedAt: now.toISOString(),
+        },
+      ])
+      .run();
+
+    await expect(
+      scheduler.releaseNextPendingNoteSlotForImmediatePublish(),
+    ).resolves.not.toThrow();
+
+    const slots = db
+      .select()
+      .from(schema.contentSlots)
+      .where(
+        sql`${schema.contentSlots.channel} = 'note' AND ${schema.contentSlots.status} = 'pending'`,
+      )
+      .all()
+      .sort((left, right) => left.id.localeCompare(right.id));
+
+    expect(slots).toHaveLength(2);
+    expect(new Date(slots[0].scheduledAt).getTime()).toBeLessThanOrEqual(
+      Date.now(),
+    );
+    expect(slots[1].scheduledAt).toBe(secondSlotTime);
+  });
+
   it("bootstraps note generation when no note posts or slots exist", async () => {
     const now = new Date().toISOString();
     const scheduler = new ContentSchedulerServiceImpl();

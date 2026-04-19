@@ -55,12 +55,7 @@ export const NOTE_DRAFT_STATUSES = [
 ] as const;
 
 export const CAMPAIGN_STATUSES = ["active", "paused", "archived"] as const;
-export const CAMPAIGN_BOTTLENECKS = [
-  "Reach",
-  "Click",
-  "Read",
-  "Buy",
-] as const;
+export const CAMPAIGN_BOTTLENECKS = ["Reach", "Click", "Read", "Buy"] as const;
 
 export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
 export type CampaignBottleneck = (typeof CAMPAIGN_BOTTLENECKS)[number];
@@ -259,6 +254,48 @@ export const contentSlots = sqliteTable(
     uniqueSlot: uniqueIndex(
       "content_slots_channel_scheduled_at_status_unique",
     ).on(table.channel, table.scheduledAt, table.status),
+  }),
+);
+
+export const proposals = sqliteTable("proposals", {
+  id: text("id").primaryKey(),
+  agentId: text("agent_id").notNull(),
+  leaderAgentId: text("leader_agent_id"),
+  executiveAgentId: text("executive_agent_id"),
+  department: text("department").notNull(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  reason: text("reason").notNull(),
+  evidence: text("evidence").notNull(),
+  expectedEffect: text("expected_effect").notNull(),
+  risk: text("risk"),
+  priority: text("priority").notNull().default("medium"),
+  status: text("status").notNull().default("pending"),
+  currentStage: text("current_stage").notNull().default("executive_review"),
+  currentApproverId: text("current_approver_id"),
+  reviewerNote: text("reviewer_note"),
+  reviewedAt: text("reviewed_at"),
+  executedAt: text("executed_at"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const proposalEvents = sqliteTable(
+  "proposal_events",
+  {
+    id: text("id").primaryKey(),
+    proposalId: text("proposal_id").notNull(),
+    stage: text("stage").notNull(),
+    action: text("action").notNull(),
+    actorId: text("actor_id").notNull(),
+    note: text("note"),
+    metadataJson: text("metadata_json"),
+    createdAt: text("created_at").notNull(),
+  },
+  (table) => ({
+    proposalCreatedIdx: index("proposal_events_proposal_created_idx").on(
+      table.proposalId,
+      table.createdAt,
+    ),
   }),
 );
 
@@ -785,7 +822,6 @@ export const AGENT_STATUSES = [
   "paused",
 ] as const;
 
-
 export const BUDGET_PERIODS = ["heartbeat", "daily"] as const;
 export const RUNNER_HEALTH_STATUSES = [
   "healthy",
@@ -851,7 +887,6 @@ export const agentStates = sqliteTable("agent_states", {
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
 });
-
 
 export const budgetTracking = sqliteTable(
   "budget_tracking",
@@ -1007,4 +1042,3 @@ export const systemControls = sqliteTable(
     ),
   }),
 );
-

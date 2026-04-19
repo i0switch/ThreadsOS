@@ -200,7 +200,6 @@ beforeAll(async () => {
     priority TEXT NOT NULL,
     created_at TEXT NOT NULL
   )`);
-
 });
 
 afterEach(() => {

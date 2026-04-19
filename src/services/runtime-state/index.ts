@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "../../db/index.js";
 import { agentStates } from "../../db/schema.js";
 import type { ActionType } from "../content-scheduler/index.js";
@@ -300,7 +300,6 @@ export function createRuntimeStateService(): RuntimeStateService {
         )})`,
       )
       .run();
-
   }
 
   function startAction(actionType: ActionType, task: string) {

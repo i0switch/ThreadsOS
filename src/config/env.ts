@@ -23,6 +23,9 @@ const envSchema = z.object({
   LLM_HEARTBEAT_MODEL_FAST: z.string().default("haiku"),
   LLM_HEARTBEAT_MODEL_STANDARD: z.string().default("sonnet"),
   LLM_HEARTBEAT_MODEL_PREMIUM: z.string().default("opus"),
+  LLM_DIRECT_MODEL_FAST: z.string().default("claude-haiku-4-20250514"),
+  LLM_DIRECT_MODEL_STANDARD: z.string().default("claude-sonnet-4-20250514"),
+  LLM_DIRECT_MODEL_PREMIUM: z.string().default("claude-opus-4-20250514"),
   LLM_CODEX_MODEL_FAST: z.string().default("gpt-5.4-mini"),
   LLM_CODEX_MODEL_STANDARD: z.string().default("gpt-5.4"),
   LLM_CODEX_MODEL_PREMIUM: z.string().default("gpt-5.4"),
@@ -34,6 +37,10 @@ const envSchema = z.object({
   LLM_RUNNER_DAILY_CALLS_LIMIT: z.coerce.number().default(200),
   LLM_RUNNER_HOURLY_TOKENS_LIMIT: z.coerce.number().default(50000),
   LLM_RUNNER_HOURLY_CALLS_LIMIT: z.coerce.number().default(50),
+  LLM_RUNNER_COPILOT_DAILY_TOKENS_LIMIT: z.coerce.number().default(600000),
+  LLM_RUNNER_COPILOT_DAILY_CALLS_LIMIT: z.coerce.number().default(600),
+  LLM_RUNNER_COPILOT_HOURLY_TOKENS_LIMIT: z.coerce.number().default(150000),
+  LLM_RUNNER_COPILOT_HOURLY_CALLS_LIMIT: z.coerce.number().default(150),
   LLM_RUNNER_5H_TOKENS_LIMIT: z.coerce.number().default(120000),
   LLM_RUNNER_5H_CALLS_LIMIT: z.coerce.number().default(120),
   LLM_RUNNER_EMERGENCY_TOKENS_LIMIT: z.coerce.number().default(999999999),
@@ -46,6 +53,10 @@ const envSchema = z.object({
     .max(1)
     .default(0.5),
   LLM_RUNNER_CIRCUIT_MIN_SAMPLES: z.coerce.number().min(1).default(5),
+  LLM_RUNNER_CIRCUIT_COOLDOWN_MS: z.coerce
+    .number()
+    .min(0)
+    .default(30 * 60 * 1000),
   OPERATIONS_MODE_WINDOW_MS: z.coerce.number().default(6 * 60 * 60 * 1000),
   EXPERIMENT_EXPLORATION_WINDOW_DAYS: z.coerce.number().min(0).default(14),
   EXECUTIVE_PARSE_FAILURE_THRESHOLD: z.coerce.number().min(1).default(3),

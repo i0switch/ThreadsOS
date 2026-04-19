@@ -8,6 +8,7 @@ const [, , sessionId, ...cliArgs] = process.argv;
 
 function parseCliArgs(args) {
   let model;
+  let stdinPrompt = false;
   const promptParts = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -16,6 +17,11 @@ function parseCliArgs(args) {
     if (arg === "--model" || arg === "-m") {
       model = args[index + 1];
       index += 1;
+      continue;
+    }
+
+    if (arg === "--stdin-prompt") {
+      stdinPrompt = true;
       continue;
     }
 
@@ -30,13 +36,23 @@ function parseCliArgs(args) {
   return {
     prompt: promptParts.join(" ").trim(),
     model,
+    stdinPrompt,
   };
 }
 
-const { prompt, model } = parseCliArgs(cliArgs);
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf-8"));
+  }
+  return chunks.join("").trim();
+}
+
+const { prompt: argvPrompt, model, stdinPrompt } = parseCliArgs(cliArgs);
+const prompt = stdinPrompt ? await readStdin() : argvPrompt;
 
 if (!sessionId || !prompt) {
-  console.error("Usage: node scripts/copilot-chat.mjs <sessionId> <prompt>");
+  console.error("Usage: node scripts/copilot-chat.mjs <sessionId> [prompt] [--stdin-prompt]");
   process.exit(1);
 }
 
